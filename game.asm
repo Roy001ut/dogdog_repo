@@ -57,6 +57,57 @@ match_buffer:   .space 288
 main:
     # Initialize the game
     jal init_game_field
+
+    # DEBUG TEST: Manually place 3 red gems vertically
+    la $t0, COLOR_RED
+    lw $t1, 0($t0)
+
+    # Place red gem at row 9, col 2 (y=9, x=2)
+    li $a0, 9       # y
+    li $a1, 2       # x
+    move $a2, $t1   # red
+    jal set_field_color
+
+    # Place red gem at row 10, col 2
+    li $a0, 10
+    li $a1, 2
+    move $a2, $t1
+    jal set_field_color
+
+    # Place red gem at row 11, col 2
+    li $a0, 11
+    li $a1, 2
+    move $a2, $t1
+    jal set_field_color
+
+    # Draw the field to see the gems
+    jal clear_screen
+    jal draw_border
+    jal draw_game_field
+
+    # Wait so we can see them
+    li $v0, 32
+    li $a0, 2000    # 2 seconds
+    syscall
+
+    # Now try to detect and clear matches
+    jal check_and_clear_matches
+
+    # Draw again to see if they were cleared
+    jal clear_screen
+    jal draw_border
+    jal draw_game_field
+
+    # Wait so we can see the result
+    li $v0, 32
+    li $a0, 3000    # 3 seconds
+    syscall
+
+    # Exit after debug test
+    li $v0, 10
+    syscall
+
+    # ORIGINAL CODE (commented out for debug):
     jal generate_new_column
 
     # Check if initial spawn is blocked (should not happen on empty field)
@@ -913,11 +964,12 @@ color_scan_row_loop:
 color_scan_col_loop:
     bge $s2, 6, color_scan_next_row
 
+    # TEMPORARILY: Only check vertical to isolate the issue
     # check horizontal
-    add $a0, $s1, $zero
-    add $a1, $s2, $zero
-    add $a2, $s0, $zero
-    jal check_and_mark_horizontal
+    # add $a0, $s1, $zero
+    # add $a1, $s2, $zero
+    # add $a2, $s0, $zero
+    # jal check_and_mark_horizontal
 
     # check vertical
     add $a0, $s1, $zero
@@ -926,16 +978,16 @@ color_scan_col_loop:
     jal check_and_mark_vertical
 
     # check diagonal form top left to bottom right
-    add $a0, $s1, $zero
-    add $a1, $s2, $zero
-    add $a2, $s0, $zero
-    jal check_and_mark_diagonal_tlbr
+    # add $a0, $s1, $zero
+    # add $a1, $s2, $zero
+    # add $a2, $s0, $zero
+    # jal check_and_mark_diagonal_tlbr
 
     # check diagonal from top right to bottom left
-    add $a0, $s1, $zero
-    add $a1, $s2, $zero
-    add $a2, $s0, $zero
-    jal check_and_mark_diagonal_trbl
+    # add $a0, $s1, $zero
+    # add $a1, $s2, $zero
+    # add $a2, $s0, $zero
+    # jal check_and_mark_diagonal_trbl
 
     addi $s2, $s2, 1        # col ++
     j color_scan_col_loop
