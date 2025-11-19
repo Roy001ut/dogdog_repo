@@ -656,7 +656,8 @@ spawn_done:
 next_color:
     lw $t0, palette_index
     lw $t1, palette_len
-    rem $t2, $t0, $t1
+    div $t0, $t1        # $t0 / $t1, 商在LO，余数在HI
+    mfhi $t2            # 将余数从HI移到$t2
     sll $t3, $t2, 2
     la $t4, palette
     add $t4, $t4, $t3
