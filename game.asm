@@ -33,6 +33,7 @@ COLOR_BLUE:    .word 0x0000ff
 COLOR_PURPLE:  .word 0x8800ff
 COLOR_GRAY:    .word 0x808080
 COLOR_BLACK:   .word 0x000000
+COLOR_WHITE:   .word 0xffffff
 
 gravity_counter: .word 0
 gravity_speed:   .word 20  # Fall every 20 frames (adjust as needed)
@@ -766,6 +767,19 @@ match_loop:
 
     beq $v0, $zero, match_loop_done
 
+    # Flash matched gems in white before clearing
+    jal flash_marked_gems
+
+    # Show the flashing for a moment
+    jal clear_screen
+    jal draw_border
+    jal draw_game_field
+
+    li $v0, 32
+    li $a0, 400
+    syscall
+
+    # Now clear them
     jal clear_marked_gems
 
     jal apply_gravity
@@ -1211,6 +1225,62 @@ no_marked_found:
 
 marked_found:
     li $v0, 1
+    jr $ra
+
+
+flash_marked_gems:
+# Flash marked gems in white to show what will be cleared
+# no input
+    addi $sp, $sp, -16
+    sw $ra, 0($sp)
+    sw $s0, 4($sp)
+    sw $s1, 8($sp)
+    sw $s2, 12($sp)
+
+    la $t0, COLOR_WHITE
+    lw $s2, 0($t0)          # $s2 = white color
+    li $s0, 0               # $s0 = row
+
+flash_row_loop:
+    bge $s0, 12, flash_done
+    li $s1, 0               # $s1 = col
+
+flash_col_loop:
+    bge $s1, 6, flash_next_row
+
+    # Calculate offset in match_buffer
+    li $t0, 6
+    mul $t1, $s0, $t0
+    add $t1, $t1, $s1
+    sll $t1, $t1, 2
+
+    # Check if this position is marked
+    la $t0, match_buffer
+    add $t0, $t0, $t1
+    lw $t2, 0($t0)
+
+    beq $t2, $zero, flash_col_next
+
+    # Flash this gem to white
+    add $a0, $s0, $zero
+    add $a1, $s1, $zero
+    add $a2, $s2, $zero
+    jal set_field_color
+
+flash_col_next:
+    addi $s1, $s1, 1
+    j flash_col_loop
+
+flash_next_row:
+    addi $s0, $s0, 1
+    j flash_row_loop
+
+flash_done:
+    lw $s2, 12($sp)
+    lw $s1, 8($sp)
+    lw $s0, 4($sp)
+    lw $ra, 0($sp)
+    addi $sp, $sp, 16
     jr $ra
 
 
