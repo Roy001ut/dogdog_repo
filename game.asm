@@ -87,13 +87,28 @@ game_loop:
     # Collision detected - lock the column to the field
     jal lock_column_to_field
 
-    # Check for matches and clear them (with cascading)
-    jal check_and_clear_matches
-
-    # Redraw after clearing
+    # Redraw to show the locked pieces
     jal clear_screen
     jal draw_border
     jal draw_game_field
+
+    # Small delay to see the locked state
+    li $v0, 32
+    li $a0, 200
+    syscall
+
+    # Check for matches and clear them (with cascading)
+    jal check_and_clear_matches
+
+    # Redraw after clearing to show what was removed
+    jal clear_screen
+    jal draw_border
+    jal draw_game_field
+
+    # Delay to see the clearing effect
+    li $v0, 32
+    li $a0, 300
+    syscall
 
     # Generate new column
     jal generate_new_column
@@ -1200,46 +1215,55 @@ marked_found:
 clear_marked_gems:
 # clear all marked gems, and set them to be 0
 # no input
-    addi $sp, $sp, -4
+    addi $sp, $sp, -16
     sw $ra, 0($sp)
+    sw $s0, 4($sp)          # Use $s0 for row
+    sw $s1, 8($sp)          # Use $s1 for col
+    sw $s2, 12($sp)         # Use $s2 for marked flag
 
-    li $t0, 0                           # $t0 = row
+    li $s0, 0               # $s0 = row
 
 clear_marked_row_loop:
-    bge $t0, 12, clear_marked_done
+    bge $s0, 12, clear_marked_done
 
-    li $t1, 0                           # $t1 = col
+    li $s1, 0               # $s1 = col
 
 clear_marked_col_loop:
-    bge $t1, 6, clear_marked_next_row   # if col >= 6, enter the next row
+    bge $s1, 6, clear_marked_next_row   # if col >= 6, enter the next row
 
-    li $t2, 6
-    mul $t3, $t0, $t2
-    add $t3, $t3, $t1
-    sll $t3, $t3, 2
+    # Calculate offset in match_buffer
+    li $t0, 6
+    mul $t1, $s0, $t0
+    add $t1, $t1, $s1
+    sll $t1, $t1, 2
 
-    la $t2, match_buffer
-    add $t2, $t2, $t3
-    lw $t3, 0($t2)
+    # Check if this position is marked
+    la $t0, match_buffer
+    add $t0, $t0, $t1
+    lw $s2, 0($t0)          # Save marked flag in $s2
 
-    beq $t3, $zero, clear_marked_col_next
+    beq $s2, $zero, clear_marked_col_next
 
-    add $a0, $t0, $zero
-    add $a1, $t1, $zero
+    # Clear the gem at this position
+    add $a0, $s0, $zero
+    add $a1, $s1, $zero
     li $a2, 0
     jal set_field_color
 
 clear_marked_col_next:
-    addi $t1, $t1, 1
+    addi $s1, $s1, 1
     j clear_marked_col_loop
 
 clear_marked_next_row:
-    addi $t0, $t0, 1
+    addi $s0, $s0, 1
     j clear_marked_row_loop
 
 clear_marked_done:
+    lw $s2, 12($sp)
+    lw $s1, 8($sp)
+    lw $s0, 4($sp)
     lw $ra, 0($sp)
-    addi $sp, $sp, 4
+    addi $sp, $sp, 16
     jr $ra
 
 
