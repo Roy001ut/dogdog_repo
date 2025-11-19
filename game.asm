@@ -58,27 +58,27 @@ main:
     # Initialize the game
     jal init_game_field
 
-    # DEBUG TEST: Manually place 3 red gems vertically
+    # DEBUG TEST: Use NEW set_cell function directly (bypass wrapper)
     la $t0, COLOR_RED
-    lw $t1, 0($t0)
+    lw $t9, 0($t0)
 
-    # Place red gem at row 9, col 2 (y=9, x=2)
-    li $a0, 9       # y
-    li $a1, 2       # x
-    move $a2, $t1   # red
-    jal set_field_color
+    # Test 1: Set position (x=2, y=9) to RED using NEW function
+    li $a0, 2       # x = 2
+    li $a1, 9       # y = 9
+    move $a2, $t9   # red
+    jal set_cell
 
-    # Place red gem at row 10, col 2
-    li $a0, 10
-    li $a1, 2
-    move $a2, $t1
-    jal set_field_color
+    # Test 2: Set position (x=2, y=10) to RED using NEW function
+    li $a0, 2       # x = 2
+    li $a1, 10      # y = 10
+    move $a2, $t9   # red
+    jal set_cell
 
-    # Place red gem at row 11, col 2
-    li $a0, 11
-    li $a1, 2
-    move $a2, $t1
-    jal set_field_color
+    # Test 3: Set position (x=2, y=11) to RED using NEW function
+    li $a0, 2       # x = 2
+    li $a1, 11      # y = 11
+    move $a2, $t9   # red
+    jal set_cell
 
     # Draw the field to see the gems
     jal clear_screen
