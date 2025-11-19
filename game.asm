@@ -1,11 +1,8 @@
 ################# CSC258 Assembly Final Project ###################
-# This file contains our implementation of Columns.
+# Columns (rewritten from scratch)
 #
 # Student 1: Name, Student Number
 # Student 2: Name, Student Number (if applicable)
-#
-# We assert that the code submitted here is entirely our own
-# creation, and will indicate otherwise when it is not.
 #
 ######################## Bitmap Display Configuration ########################
 # - Unit width in pixels:       8
@@ -19,2051 +16,678 @@
 ##############################################################################
 # Immutable Data
 ##############################################################################
-# The address of the bitmap display. Don't forget to connect it!
-ADDR_DSPL:    .word 0x10008000
-# The address of the keyboard. Don't forget to connect it!
-ADDR_KBRD:    .word 0xffff0000
-SCREEN_WIDTH:  .word 32
+ADDR_DSPL:      .word 0x10008000     # Bitmap display base address
+ADDR_KBRD:      .word 0xffff0000     # Keyboard base address
+SCREEN_WIDTH:   .word 32
 
-COLOR_RED:     .word 0xff0000
-COLOR_ORANGE:  .word 0xff8800
-COLOR_YELLOW:  .word 0xffff00
-COLOR_GREEN:   .word 0x00ff00
-COLOR_BLUE:    .word 0x0000ff
-COLOR_PURPLE:  .word 0x8800ff
-COLOR_GRAY:    .word 0x808080
-COLOR_BLACK:   .word 0x000000
-COLOR_WHITE:   .word 0xffffff
+COLOR_RED:      .word 0xff0000
+COLOR_ORANGE:   .word 0xff8800
+COLOR_YELLOW:   .word 0xffff00
+COLOR_GREEN:    .word 0x00ff00
+COLOR_BLUE:     .word 0x0000ff
+COLOR_PURPLE:   .word 0x8800ff
+COLOR_GRAY:     .word 0x808080
+COLOR_BLACK:    .word 0x000000
+COLOR_WHITE:    .word 0xffffff
 
+# Board dimensions
+BOARD_WIDTH:    .word 6
+BOARD_HEIGHT:   .word 12
+CELL_SIZE:      .word 8
+
+# Gravity pacing
 gravity_counter: .word 0
-gravity_speed:   .word 20  # Fall every 20 frames (adjust as needed)
+gravity_speed:   .word 20
+
+# Palette used for random generation
+palette:
+    .word 0xff0000, 0xff8800, 0xffff00, 0x00ff00, 0x0000ff, 0x8800ff
+palette_len: .word 6
+palette_index: .word 0
+
 ##############################################################################
 # Mutable Data
 ##############################################################################
+current_column: .word 0, 0, 0       # top -> bottom
+column_x:       .word 2             # spawn near center
+column_y:       .word -2            # spawn above board
 
-current_column: .word 0xff0000, 0x00ff00, 0x0000ff
-column_x:       .word 2
-column_y:       .word 0
-
-game_field:     .space 288
+game_field:     .space 288          # 72 cells
 match_buffer:   .space 288
+
 ##############################################################################
 # Code
 ##############################################################################
-	.text
-	.globl main
+    .text
+    .globl main
 
-    # Run the game.
 main:
-    # Initialize the game
     jal init_game_field
     jal generate_new_column
-
-    # Check if initial spawn is blocked (should not happen on empty field)
-    jal check_initial_collision
+    jal check_spawn_collision
     bne $v0, $zero, game_over
 
-game_loop:
-    # Check keyboard input
-    jal check_keyboard
-
-    # Apply automatic gravity (makes column fall slowly)
+main_loop:
+    jal handle_input
     jal apply_auto_gravity
 
-    # Clear screen and redraw everything
     jal clear_screen
     jal draw_border
     jal draw_game_field
     jal draw_current_column
 
-    # Add a small delay to make the game playable (not too fast)
-    li $v0, 32          # syscall: sleep
-    li $a0, 50          # sleep for 50 milliseconds
+    li $v0, 32
+    li $a0, 40
     syscall
 
-    # Check if current column hit the bottom or another piece
-    jal check_bottom_collision
-    beq $v0, $zero, game_loop   # No collision, continue loop
+    jal check_falling_collision
+    beq $v0, $zero, main_loop
 
-    # Collision detected - lock the column to the field
     jal lock_column_to_field
 
-    # Redraw to show the locked pieces
     jal clear_screen
     jal draw_border
     jal draw_game_field
 
-    # Small delay to see the locked state
+    li $v0, 32
+    li $a0, 150
+    syscall
+
+    jal check_and_clear_matches
+
+    jal clear_screen
+    jal draw_border
+    jal draw_game_field
+
     li $v0, 32
     li $a0, 200
     syscall
 
-    # Check for matches and clear them (with cascading)
-    jal check_and_clear_matches
-
-    # Redraw after clearing to show what was removed
-    jal clear_screen
-    jal draw_border
-    jal draw_game_field
-
-    # Delay to see the clearing effect
-    li $v0, 32
-    li $a0, 300
-    syscall
-
-    # Generate new column
     jal generate_new_column
-
-    # Check if new column can spawn (game over check)
-    jal check_initial_collision
-    bne $v0, $zero, game_over
-
-    # Continue game loop
-    j game_loop
+    jal check_spawn_collision
+    beq $v0, $zero, main_loop
 
 game_over:
-    # Display game over (draw final state)
     jal clear_screen
     jal draw_border
     jal draw_game_field
-
-    # Exit gracefully
     li $v0, 10
     syscall
 
-
 ##############################################################################
-# Functions
+# Initialization
 ##############################################################################
-check_keyboard:
-    lw $t0, ADDR_KBRD           # $t0 = base address
-    lw $t1, 0($t0)              # check if pressed
-
-    beq $t1, 1, key_pressed     # if pressed, jump
-    jr $ra                      # else, jump back
-
-key_pressed:
-    lw $t2, 4($t0)
-
-    # check which key pressed
-    beq $t2, 0x61, respond_a    # 'a' = 0x61
-    beq $t2, 0x64, respond_d    # 'd' = 0x64
-    beq $t2, 0x73, respond_s    # 's' = 0x73
-    beq $t2, 0x77, respond_w    # 'w' = 0x77
-    beq $t2, 0x71, respond_q    # 'q' = 0x71
-
-    jr $ra                      # other keys, ignore, and jump back
-
-# key a pressed.
-respond_a:
-    addi $sp, $sp, -4
-    sw $ra, 0($sp)
-
-    lw $t3, column_x            # get prevous col
-    beq $t3, 0, respond_a_done  # check if hit the leftmost, true: jump out
-
-    # Check if moving left would cause collision
-    addi $a0, $t3, -1           # new x position (left)
-    jal check_horizontal_collision
-    bne $v0, $zero, respond_a_done  # collision detected, don't move
-
-    lw $t3, column_x            # reload column_x
-    addi $t3, $t3, -1           # col - 1
-    sw $t3, column_x            # put new col back
-respond_a_done:
-    lw $ra, 0($sp)
-    addi $sp, $sp, 4
-    jr $ra
-
-
-respond_d:
-    addi $sp, $sp, -4
-    sw $ra, 0($sp)
-
-    lw $t3, column_x                # get previous col
-    li $t4, 5                       # set rightmost as 5
-    beq $t3, $t4, respond_d_done    # check if hit the rightmist, true: jump out
-
-    # Check if moving right would cause collision
-    addi $a0, $t3, 1                # new x position (right)
-    jal check_horizontal_collision
-    bne $v0, $zero, respond_d_done  # collision detected, don't move
-
-    lw $t3, column_x                # reload column_x
-    addi $t3, $t3, 1                # col + 1
-    sw $t3, column_x                # reload
-respond_d_done:
-    lw $ra, 0($sp)
-    addi $sp, $sp, 4
-    jr $ra
-
-
-respond_s:
-    addi $sp, $sp, -4
-    sw $ra, 0($sp)
-
-    # Check if can move down (use existing collision detection)
-    jal check_bottom_collision
-    bne $v0, $zero, respond_s_done  # collision detected, don't move
-
-    # No collision, move down
-    lw $t3, column_y
-    addi $t3, $t3, 1
-    sw $t3, column_y
-
-respond_s_done:
-    lw $ra, 0($sp)
-    addi $sp, $sp, 4
-    jr $ra
-
-
-respond_w:
-    # get initial color data
-    la $t0, current_column
-    lw $t1, 0($t0)
-    lw $t2, 4($t0)
-    lw $t3, 8($t0)
-    # change order (1,2,3) -> (2, 3, 1)
-    sw $t2, 0($t0)
-    sw $t3, 4($t0)
-    sw $t1, 8($t0)
-    # done
-    jr $ra
-
-
-respond_q:
-    li $v0, 10                      # Quit gracefully
-	syscall
-
-
-draw_pixel_at_screen:
-# Draw a single pixel.
-# input：$a0=row, $a1=col, $a2=color
-    lw $t0, ADDR_DSPL # $t0 = initial location
-    lw $t1, SCREEN_WIDTH # $t1 = 8
-
-    # offset
-    mul $t2, $a0, $t1 # row * 8, get row unit num
-    add $t2, $t2, $a1 # add with col unit num
-    sll $t2, $t2, 2   # $t2 * 4 get actual location
-    add $t2, $t0, $t2 # using $t2 store final location
-
-    sw $a2, 0($t2)    # write color
-
-    jr $ra
-
-
-draw_game_pixel:
-# Draw a single pixel with offset 1 to fit the game border.
-# input：$a0=row (y), $a1=col (x), $a2=color
-    # use $sp to store previous $ra
-    addi $sp, $sp, -4
-    sw $ra, 0($sp)
-
-    # change offset
-    addi $a0, $a0, 1
-    addi $a1, $a1, 1
-    add $a2, $a2, $zero
-    # draw game pixel
-    jal draw_pixel_at_screen
-
-    # resume previous $ra
-    lw $ra, 0($sp)
-    addi $sp, $sp, 4
-    jr $ra
-
-draw_horizontal_line:
-# 参数：$a0=行, $a1=起始列, $a2=结束列, $a3=颜色
-    # use $sp to store previous $ra
-    addi $sp, $sp, -20
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-    sw $s1, 8($sp)
-    sw $s2, 12($sp)
-    sw $s3, 16($sp)
-
-    # store arguments into $t0~$t3
-    add $s0, $zero, $a0
-    add $s1, $zero, $a1
-    add $s2, $zero, $a2
-    add $s3, $zero, $a3
-
-draw_h_loop:
-    # condition
-    beq $s1, $s2, draw_h_done
-    # set up new $a
-    add $a0, $s0, $zero  # row num
-    add $a1, $s1, $zero  # current col num
-    add $a2, $s3, $zero  # color
-    jal draw_pixel_at_screen
-
-    addi $s1, $s1, 1     # current col num ++1
-    j draw_h_loop
-
-draw_h_done:
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 20
-    jr $ra
-
-
-draw_vertical_line:
-# 参数：$a0=列, $a1=起始行, $a2=结束行, $a3=颜色
-    # use $sp to store previous $ra
-    addi $sp, $sp, -20
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-    sw $s1, 8($sp)
-    sw $s2, 12($sp)
-    sw $s3, 16($sp)
-
-    # store arguments into $t0~$t3
-    add $s0, $zero, $a0
-    add $s1, $zero, $a1
-    add $s2, $zero, $a2
-    add $s3, $zero, $a3
-
-draw_v_loop:
-    # condition
-    beq $s1, $s2, draw_v_done
-    # store arguments into $t0~$t3
-    add $a1, $s0, $zero  # col num
-    add $a0, $s1, $zero  # current row num
-    add $a2, $s3, $zero  # color
-    jal draw_pixel_at_screen
-
-    addi $s1, $s1, 1     # row num ++1
-    j draw_v_loop
-
-draw_v_done:
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 20
-    jr $ra
-
-
-clear_screen:
-# Clear the entire screen to black
-    addi $sp, $sp, -16
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-    sw $s1, 8($sp)
-    sw $s2, 12($sp)
-
-    la $t0, COLOR_BLACK
-    lw $s2, 0($t0)      # $s2 = black color
-
-    li $s0, 0           # row = 0
-
-clear_row_loop:
-    bge $s0, 14, clear_done     # 14 rows total (0-13)
-    li $s1, 0           # col = 0
-
-clear_col_loop:
-    bge $s1, 8, clear_next_row  # 8 cols total (0-7)
-
-    # Draw black pixel
-    add $a0, $s0, $zero
-    add $a1, $s1, $zero
-    add $a2, $s2, $zero
-    jal draw_pixel_at_screen
-
-    addi $s1, $s1, 1
-    j clear_col_loop
-
-clear_next_row:
-    addi $s0, $s0, 1
-    j clear_row_loop
-
-clear_done:
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 16
-    jr $ra
-
-
-draw_border:
-# 参数: N/A
-    # use $sp to store previous $ra
-    addi $sp, $sp, -4
-    sw $ra, 0($sp)
-
-    la $t0, COLOR_GRAY
-    lw $t9, 0($t0)
-    # top
-    li $a0, 0
-    li $a1, 0
-    li $a2, 8
-    add $a3, $t9, $zero
-    jal draw_horizontal_line
-
-    # bottom
-    li $a0, 13
-    li $a1, 0
-    li $a2, 8
-    add $a3, $t9, $zero
-    jal draw_horizontal_line
-
-    # left
-    li $a0, 0
-    li $a1, 1
-    li $a2, 13
-    add $a3, $t9, $zero
-    jal draw_vertical_line
-
-    # right
-    li $a0, 7
-    li $a1, 1
-    li $a2, 13
-    add $a3, $t9, $zero
-    jal draw_vertical_line
-
-    lw $ra, 0($sp)
-    addi $sp, $sp, 4
-    jr $ra
-
-
-draw_current_column:
-# 参数: N/A
-    # Use stack to store previous value
-    addi $sp, $sp, -20
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)              # 保存 $s0
-    sw $s1, 8($sp)              # 保存 $s1
-    sw $s2, 12($sp)             # 保存 $s2
-    sw $s3, 16($sp)
-
-    # Load position and color
-    lw $s0, column_x
-    lw $s1, column_y
-    la $s2, current_column
-
-    # Draw the top gem
-    lw $s3, 0($s2)
-    add $a0, $s1, $zero
-    add $a1, $s0, $zero
-    add $a2, $s3, $zero
-    jal draw_game_pixel
-
-    # Draw the middle gem
-    lw $s3, 4($s2)
-    addi $a0, $s1, 1
-    add $a1, $s0, $zero
-    add $a2, $s3, $zero
-    jal draw_game_pixel
-
-    # Draw the bottom gem
-    lw $s3, 8($s2)
-    addi $a0, $s1, 2
-    add $a1, $s0, $zero
-    add $a2, $s3, $zero
-    jal draw_game_pixel
-
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 20
-    jr $ra
-
-
-clear_current_column:
-# clear the column when move
-    addi $sp, $sp, -16          # store return address
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-    sw $s1, 8($sp)
-    sw $s2, 12($sp)
-
-    # get the top gem column position, and get color black
-    lw $s0, column_x
-    lw $s1, column_y
-    la $t0, COLOR_BLACK
-    lw $s2, 0($t0)
-
-    # clear the top
-    add $a0, $s1, $zero
-    add $a1, $s0, $zero
-    add $a2, $s2, $zero
-    jal draw_game_pixel
-
-    # clear the middle
-    addi $a0, $s1, 1
-    add $a1, $s0, $zero
-    add $a2, $s2, $zero
-    jal draw_game_pixel
-    # clear the bottom
-    addi $a0, $s1, 2
-    add $a1, $s0, $zero
-    add $a2, $s2, $zero
-    jal draw_game_pixel
-
-
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 16
-    jr $ra
-
-
-############################################################################
-# M3
 init_game_field:
-# initialize the game field
-    la $t0, game_field  # set space
-    li $t1, 72          # set counter
-
+    la $t0, game_field
+    li $t1, 72
+    li $t2, 0
 init_loop:
-    beq $t1, $zero, init_done   # check counter
-    sw $zero, 0($t0)            # write 0 to each grid
-    addi $t0, $t0, 4            # move to the next grid
-    addi $t1, $t1, -1           # counter decrement
+    beq $t2, $t1, init_done
+    sw $zero, 0($t0)
+    addi $t0, $t0, 4
+    addi $t2, $t2, 1
     j init_loop
 init_done:
     jr $ra
 
-
-check_bottom_collision:
-# check whether the column hit,
-# return $v0 = 1/0
-# NEW: Use get_cell(x, y)
-    addi $sp, $sp, -16
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-    sw $s1, 8($sp)
-    sw $s2, 12($sp)
-    # get the location
-    lw $s0, column_x        # $s0 = x
-    lw $s1, column_y        # $s1 = y
-
-    addi $s2, $s1, 2        # $s2 = y + 2 (bottom gem position)
-    # 1. check if it hit the bottom
-    li $t0, 11
-    beq $s2, $t0, collision_detected
-
-    # 2. check if it hit other column - get_cell(x, y)
-    add $a0, $s0, $zero     # a0 = x
-    addi $a1, $s2, 1        # a1 = y + 3 (one below bottom gem)
-    jal get_cell
-    # recieve $v0 represent the T/F
-    bne $v0, $zero, collision_detected # $v0 is True
-
-    #otherwise, no collision
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 16
-    li $v0, 0
-    jr $ra
-
-collision_detected:
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 16
-    li $v0, 1
-    jr $ra
-
-
-check_horizontal_collision:
-# Check if moving the current column to new_x would cause collision
-# $a0 = new_x position to check
-# return $v0 = 1 if collision, 0 if OK
-# NEW: Use get_cell(x, y)
-    addi $sp, $sp, -12
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)     # new_x
-    sw $s1, 8($sp)     # current_y
-
-    add $s0, $a0, $zero     # new_x
-    lw $s1, column_y        # current_y
-
-    # Check all three gem positions
-    # Check top gem - get_cell(x, y)
-    add $a0, $s0, $zero     # a0 = new_x
-    add $a1, $s1, $zero     # a1 = y
-    jal get_cell
-    bne $v0, $zero, h_collision_detected
-
-    # Check middle gem
-    add $a0, $s0, $zero     # a0 = new_x
-    addi $a1, $s1, 1        # a1 = y + 1
-    jal get_cell
-    bne $v0, $zero, h_collision_detected
-
-    # Check bottom gem
-    add $a0, $s0, $zero     # a0 = new_x
-    addi $a1, $s1, 2        # a1 = y + 2
-    jal get_cell
-    bne $v0, $zero, h_collision_detected
-
-    # No collision
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 12
-    li $v0, 0
-    jr $ra
-
-h_collision_detected:
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 12
-    li $v0, 1
-    jr $ra
-
-
-####################################################################
-# GAME FIELD CORE FUNCTIONS
-# Convention: ALL functions use (x, y) where:
-#   x = column (0-5, left to right)
-#   y = row (0-11, top to bottom)
-# Storage: game_field[y][x] at offset (y * 6 + x) * 4
-####################################################################
-
-get_cell:
-# Get color at position (x, y)
-# Input: $a0 = x (column 0-5), $a1 = y (row 0-11)
-# Output: $v0 = color (0 if out of bounds or empty)
-    # Bounds check
-    bltz $a0, cell_out_of_bounds    # x < 0
-    bgt $a0, 5, cell_out_of_bounds   # x > 5
-    bltz $a1, cell_out_of_bounds    # y < 0
-    bgt $a1, 11, cell_out_of_bounds  # y > 11
-
-    # Calculate offset: (y * 6 + x) * 4
-    li $t0, 6
-    mul $t1, $a1, $t0      # t1 = y * 6
-    add $t1, $t1, $a0      # t1 = y * 6 + x
-    sll $t1, $t1, 2        # t1 = (y * 6 + x) * 4
-
-    # Load from game_field
-    la $t0, game_field
-    add $t0, $t0, $t1
-    lw $v0, 0($t0)
-    jr $ra
-
-cell_out_of_bounds:
-    li $v0, 0
-    jr $ra
-
-
-set_cell:
-# Set color at position (x, y)
-# Input: $a0 = x (column 0-5), $a1 = y (row 0-11), $a2 = color
-    # Bounds check
-    bltz $a0, set_cell_done
-    bgt $a0, 5, set_cell_done
-    bltz $a1, set_cell_done
-    bgt $a1, 11, set_cell_done
-
-    # Calculate offset: (y * 6 + x) * 4
-    li $t0, 6
-    mul $t1, $a1, $t0      # t1 = y * 6
-    add $t1, $t1, $a0      # t1 = y * 6 + x
-    sll $t1, $t1, 2        # t1 = (y * 6 + x) * 4
-
-    # Store to game_field
-    la $t0, game_field
-    add $t0, $t0, $t1
-    sw $a2, 0($t0)
-
-set_cell_done:
-    jr $ra
-
-
-# Legacy wrapper functions for compatibility
-get_field_color:
-# OLD INTERFACE: $a0 = y, $a1 = x -> $v0 = color
-# Wrapper that converts to new convention
-    addi $sp, $sp, -8
-    sw $a0, 0($sp)
-    sw $a1, 4($sp)
-
-    # Swap arguments: old (y,x) -> new (x,y)
-    lw $a0, 4($sp)      # a0 = old x
-    lw $a1, 0($sp)      # a1 = old y
-
-    addi $sp, $sp, 8
-    j get_cell
-
-
-set_field_color:
-# OLD INTERFACE: $a0 = y, $a1 = x, $a2 = color
-# Wrapper that converts to new convention
-    addi $sp, $sp, -8
-    sw $a0, 0($sp)
-    sw $a1, 4($sp)
-
-    # Swap arguments: old (y,x) -> new (x,y)
-    move $t0, $a2       # save color
-    lw $a0, 4($sp)      # a0 = old x
-    lw $a1, 0($sp)      # a1 = old y
-    move $a2, $t0       # restore color
-
-    addi $sp, $sp, 8
-    j set_cell
-
-
-lock_column_to_field:
-# lock the current column to the field
-# NEW: Use set_cell(x, y, color) directly
-    addi $sp, $sp, -16
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-    sw $s1, 8($sp)
-    sw $s2, 12($sp)
-    # get column location
-    lw $s0, column_x        # $s0 = x
-    lw $s1, column_y        # $s1 = y
-    la $s2, current_column
-    # lock the top gem
-    add $a0, $s0, $zero     # a0 = x
-    add $a1, $s1, $zero     # a1 = y
-    lw $a2, 0($s2)          # a2 = color
-    jal set_cell
-    # lock the middle gem
-    add $a0, $s0, $zero     # a0 = x
-    addi $a1, $s1, 1        # a1 = y + 1
-    lw $a2, 4($s2)          # a2 = color
-    jal set_cell
-    # lock the bottom gem
-    add $a0, $s0, $zero     # a0 = x
-    addi $a1, $s1, 2        # a1 = y + 2
-    lw $a2, 8($s2)          # a2 = color
-    jal set_cell
-
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 16
-    jr $ra
-
-
-draw_game_field:
-# Draw all gems in the field.
-# NEW: Use get_cell(x, y)
-    addi $sp, $sp, -16
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-    sw $s1, 8($sp)
-    sw $s2, 12($sp)
-
-    li $s0, 0       # $s0 = y
-
-draw_field_row_loop:
-    li $t0, 12      # set max y
-    bge $s0, $t0, draw_field_done       # check if hit
-
-    li $s1, 0       # $s1 = x
-
-draw_field_col_loop:
-    li $t0, 6       # set max x
-    bge $s1, $t0, draw_field_next_row        # check if hit
-    # first, get the color at the location - get_cell(x, y)
-    add $a0, $s1, $zero     # a0 = x
-    add $a1, $s0, $zero     # a1 = y
-    jal get_cell
-
-    beq $v0, $zero, draw_field_skip     # if $v0 is 0, it's empty
-    # then draw the grid - draw_game_pixel(y, x, color)
-    add $a0, $s0, $zero     # a0 = y (for drawing)
-    add $a1, $s1, $zero     # a1 = x (for drawing)
-    add $a2, $v0, $zero     # a2 = color
-    jal draw_game_pixel
-
-draw_field_skip:
-    addi $s1, $s1, 1        # x++
-    j draw_field_col_loop
-
-draw_field_next_row:
-    addi $s0, $s0, 1        # y++
-    j draw_field_row_loop
-
-draw_field_done:
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 16
-    jr $ra
-
-
-check_and_clear_matches:
-# check and clear
-addi $sp, $sp, -4
-    sw $ra, 0($sp)
-
-match_loop:
-    jal init_match_buffer
-
-    jal scan_all_color_matches
-
-    jal check_if_any_marked
-
-    beq $v0, $zero, match_loop_done
-
-    # Flash matched gems in white before clearing
-    jal flash_marked_gems
-
-    # Show the flashing for a moment
-    jal clear_screen
-    jal draw_border
-    jal draw_game_field
-
-    li $v0, 32
-    li $a0, 400
-    syscall
-
-    # Now clear them
-    jal clear_marked_gems
-
-    jal apply_gravity
-
-    j match_loop
-
-match_loop_done:
-    lw $ra, 0($sp)
-    addi $sp, $sp, 4
-    jr $ra
-
-scan_all_color_matches:
-# scan all color
-    addi $sp, $sp, -8
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-
-    la $t0, COLOR_RED
-    lw $s0, 0($t0)
-    jal scan_color_matches
-
-    la $t0, COLOR_ORANGE
-    lw $s0, 0($t0)
-    jal scan_color_matches
-
-    la $t0, COLOR_YELLOW
-    lw $s0, 0($t0)
-    jal scan_color_matches
-
-    la $t0, COLOR_GREEN
-    lw $s0, 0($t0)
-    jal scan_color_matches
-
-    la $t0, COLOR_BLUE
-    lw $s0, 0($t0)
-    jal scan_color_matches
-
-    la $t0, COLOR_PURPLE
-    lw $s0, 0($t0)
-    jal scan_color_matches
-
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 8
-    jr $ra
-
-
-
-
-
-init_match_buffer:
-# initialize the match_buffer, set them 0.
-    la $t0, match_buffer
-    li $t1, 72  # 72 = 12*6
-
-init_match_loop:
-    beq $t1, $zero, init_match_done
-    sw $zero, 0($t0)
-    addi $t0, $t0, 4
-    addi $t1, $t1, -1
-    j init_match_loop
-
-init_match_done:
-    jr $ra
-
-
-####################################################################
-# COMPLETELY REWRITTEN MATCH DETECTION SYSTEM
-# Simple, clear, and correct
-####################################################################
-
-# COORDINATE SYSTEM:
-# - game_field and match_buffer both use [y][x] storage
-# - Offset = (y * 6 + x) * 4
-# - We use get_cell(x, y) to read, but mark_buffer uses (y, x) indexing
-
-####################################################################
-# Helper: Check if cell at (x, y) has target color
-# Input: $a0 = x, $a1 = y, $a2 = target_color
-# Output: $v0 = 1 if match, 0 if not
-####################################################################
-check_cell_matches:
-    addi $sp, $sp, -8
-    sw $ra, 0($sp)
-    sw $a2, 4($sp)      # Save target color
-
-    jal get_cell        # get_cell(x, y)
-    lw $a2, 4($sp)      # Restore target color
-
-    # Compare
-    beq $v0, $a2, cell_matches
-    li $v0, 0           # No match
-    j cell_matches_done
-
-cell_matches:
-    li $v0, 1           # Match!
-
-cell_matches_done:
-    lw $ra, 0($sp)
-    addi $sp, $sp, 8
-    jr $ra
-
-
-####################################################################
-# Helper: Mark cell at (x, y) for deletion
-# Input: $a0 = x, $a1 = y
-####################################################################
-mark_cell:
-    # Calculate offset = (y * 6 + x) * 4
-    li $t0, 6
-    mul $t1, $a1, $t0       # y * 6
-    add $t1, $t1, $a0       # y * 6 + x
-    sll $t1, $t1, 2         # (y * 6 + x) * 4
-
-    # Mark in match_buffer
-    la $t0, match_buffer
-    add $t0, $t0, $t1
-    li $t2, 1
-    sw $t2, 0($t0)
-
-    jr $ra
-
-
-####################################################################
-# LINE-BASED MATCH DETECTION
-# Scan all lines (rows, columns, diagonals) once
-# Mark all matches in match_buffer, then delete all at once
-####################################################################
-
-####################################################################
-# Scan all ROWS for matches of target color
-# Input: $a0 = target_color
-####################################################################
-scan_all_rows:
-    addi $sp, $sp, -24
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # target_color
-    sw $s1, 8($sp)      # row (y)
-    sw $s2, 12($sp)     # start_x of current run
-    sw $s3, 16($sp)     # run_length
-    sw $s4, 20($sp)     # current_x
-
-    move $s0, $a0       # target_color
-    li $s1, 0           # row = 0
-
-scan_rows_loop:
-    bge $s1, 12, scan_rows_done
-
-    # Scan this row from left to right
-    li $s2, -1          # start_x = -1 (no run yet)
-    li $s3, 0           # run_length = 0
-    li $s4, 0           # current_x = 0
-
-scan_row_cells:
-    bge $s4, 6, check_row_end   # reached end of row?
-
-    # Check cell at (current_x, row)
-    move $a0, $s4       # x
-    move $a1, $s1       # y
-    move $a2, $s0       # color
-    jal check_cell_matches
-
-    beq $v0, $zero, row_run_break   # no match, break run
-
-    # Cell matches - extend run
-    beq $s3, $zero, row_start_run   # starting new run?
-    addi $s3, $s3, 1    # extend existing run
-    j row_next_cell
-
-row_start_run:
-    move $s2, $s4       # start_x = current_x
-    li $s3, 1           # run_length = 1
-    j row_next_cell
-
-row_run_break:
-    # Run broken - mark if length >= 3
-    blt $s3, 3, row_no_mark
-    move $a0, $s2       # start_x
-    move $a1, $s1       # row
-    move $a2, $s3       # length
-    jal mark_horizontal_run
-row_no_mark:
-    li $s2, -1          # reset start_x
-    li $s3, 0           # reset run_length
-
-row_next_cell:
-    addi $s4, $s4, 1    # current_x++
-    j scan_row_cells
-
-check_row_end:
-    # Check if there's a run at end of row
-    blt $s3, 3, row_next_row
-    move $a0, $s2       # start_x
-    move $a1, $s1       # row
-    move $a2, $s3       # length
-    jal mark_horizontal_run
-
-row_next_row:
-    addi $s1, $s1, 1    # row++
-    j scan_rows_loop
-
-scan_rows_done:
-    lw $s4, 20($sp)
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 24
-    jr $ra
-
-
-####################################################################
-# Mark a horizontal run
-# Input: $a0 = start_x, $a1 = y, $a2 = length
-####################################################################
-mark_horizontal_run:
-    addi $sp, $sp, -16
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # current_x
-    sw $s1, 8($sp)      # y
-    sw $s2, 12($sp)     # remaining
-
-    move $s0, $a0       # current_x = start_x
-    move $s1, $a1       # y
-    move $s2, $a2       # remaining = length
-
-mark_h_loop:
-    beq $s2, $zero, mark_h_done
-
-    move $a0, $s0       # x
-    move $a1, $s1       # y
-    jal mark_cell
-
-    addi $s0, $s0, 1    # current_x++
-    addi $s2, $s2, -1   # remaining--
-    j mark_h_loop
-
-mark_h_done:
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 16
-    jr $ra
-
-
-####################################################################
-# Scan all COLUMNS for matches of target color
-# Input: $a0 = target_color
-####################################################################
-scan_all_columns:
-    addi $sp, $sp, -24
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # target_color
-    sw $s1, 8($sp)      # col (x)
-    sw $s2, 12($sp)     # start_y of current run
-    sw $s3, 16($sp)     # run_length
-    sw $s4, 20($sp)     # current_y
-
-    move $s0, $a0       # target_color
-    li $s1, 0           # col = 0
-
-scan_cols_loop:
-    bge $s1, 6, scan_cols_done
-
-    # Scan this column from top to bottom
-    li $s2, -1          # start_y = -1 (no run yet)
-    li $s3, 0           # run_length = 0
-    li $s4, 0           # current_y = 0
-
-scan_col_cells:
-    bge $s4, 12, check_col_end  # reached end of column?
-
-    # Check cell at (col, current_y)
-    move $a0, $s1       # x
-    move $a1, $s4       # y
-    move $a2, $s0       # color
-    jal check_cell_matches
-
-    beq $v0, $zero, col_run_break   # no match, break run
-
-    # Cell matches - extend run
-    beq $s3, $zero, col_start_run   # starting new run?
-    addi $s3, $s3, 1    # extend existing run
-    j col_next_cell
-
-col_start_run:
-    move $s2, $s4       # start_y = current_y
-    li $s3, 1           # run_length = 1
-    j col_next_cell
-
-col_run_break:
-    # Run broken - mark if length >= 3
-    blt $s3, 3, col_no_mark
-    move $a0, $s1       # col
-    move $a1, $s2       # start_y
-    move $a2, $s3       # length
-    jal mark_vertical_run
-col_no_mark:
-    li $s2, -1          # reset start_y
-    li $s3, 0           # reset run_length
-
-col_next_cell:
-    addi $s4, $s4, 1    # current_y++
-    j scan_col_cells
-
-check_col_end:
-    # Check if there's a run at end of column
-    blt $s3, 3, col_next_col
-    move $a0, $s1       # col
-    move $a1, $s2       # start_y
-    move $a2, $s3       # length
-    jal mark_vertical_run
-
-col_next_col:
-    addi $s1, $s1, 1    # col++
-    j scan_cols_loop
-
-scan_cols_done:
-    lw $s4, 20($sp)
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 24
-    jr $ra
-
-
-####################################################################
-# Mark a vertical run
-# Input: $a0 = x, $a1 = start_y, $a2 = length
-####################################################################
-mark_vertical_run:
-    addi $sp, $sp, -16
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # x
-    sw $s1, 8($sp)      # current_y
-    sw $s2, 12($sp)     # remaining
-
-    move $s0, $a0       # x
-    move $s1, $a1       # current_y = start_y
-    move $s2, $a2       # remaining = length
-
-mark_v_loop:
-    beq $s2, $zero, mark_v_done
-
-    move $a0, $s0       # x
-    move $a1, $s1       # y
-    jal mark_cell
-
-    addi $s1, $s1, 1    # current_y++
-    addi $s2, $s2, -1   # remaining--
-    j mark_v_loop
-
-mark_v_done:
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 16
-    jr $ra
-
-
-####################################################################
-# Mark a diagonal run (top-left to bottom-right)
-# Input: $a0 = start_x, $a1 = start_y, $a2 = length
-####################################################################
-mark_diagonal_tlbr_run:
-    addi $sp, $sp, -20
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # current_x
-    sw $s1, 8($sp)      # current_y
-    sw $s2, 12($sp)     # remaining
-    sw $s3, 16($sp)     # temp
-
-    move $s0, $a0       # current_x = start_x
-    move $s1, $a1       # current_y = start_y
-    move $s2, $a2       # remaining = length
-
-mark_tlbr_loop:
-    beq $s2, $zero, mark_tlbr_done
-
-    move $a0, $s0       # x
-    move $a1, $s1       # y
-    jal mark_cell
-
-    addi $s0, $s0, 1    # current_x++
-    addi $s1, $s1, 1    # current_y++
-    addi $s2, $s2, -1   # remaining--
-    j mark_tlbr_loop
-
-mark_tlbr_done:
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 20
-    jr $ra
-
-
-####################################################################
-# Mark a diagonal run (top-right to bottom-left)
-# Input: $a0 = start_x, $a1 = start_y, $a2 = length
-####################################################################
-mark_diagonal_trbl_run:
-    addi $sp, $sp, -20
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # current_x
-    sw $s1, 8($sp)      # current_y
-    sw $s2, 12($sp)     # remaining
-    sw $s3, 16($sp)     # temp
-
-    move $s0, $a0       # current_x = start_x
-    move $s1, $a1       # current_y = start_y
-    move $s2, $a2       # remaining = length
-
-mark_trbl_loop:
-    beq $s2, $zero, mark_trbl_done
-
-    move $a0, $s0       # x
-    move $a1, $s1       # y
-    jal mark_cell
-
-    addi $s0, $s0, -1   # current_x--
-    addi $s1, $s1, 1    # current_y++
-    addi $s2, $s2, -1   # remaining--
-    j mark_trbl_loop
-
-mark_trbl_done:
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 20
-    jr $ra
-
-
-####################################################################
-# Scan all DIAGONALS (top-left to bottom-right) for matches
-# Input: $a0 = target_color
-####################################################################
-scan_all_diagonals_tlbr:
-    addi $sp, $sp, -32
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # target_color
-    sw $s1, 8($sp)      # start_x
-    sw $s2, 12($sp)     # start_y
-    sw $s3, 16($sp)     # current_x
-    sw $s4, 20($sp)     # current_y
-    sw $s5, 24($sp)     # run_start_x
-    sw $s6, 28($sp)     # run_start_y
-
-    move $s0, $a0       # target_color
-
-    # First set: Diagonals starting from top row (y=0, x=0 to 5)
-    li $s2, 0           # start_y = 0
-    li $s1, 0           # start_x = 0
-
-tlbr_top_row_loop:
-    bge $s1, 6, tlbr_left_col_start
-
-    # Scan diagonal starting at (start_x, 0)
-    move $s3, $s1       # current_x = start_x
-    move $s4, $s2       # current_y = start_y
-    li $t0, 0           # run_length = 0
-    li $s5, -1          # run_start_x = -1
-    li $s6, -1          # run_start_y = -1
-
-tlbr_top_scan:
-    bge $s3, 6, tlbr_top_end        # reached right edge?
-    bge $s4, 12, tlbr_top_end       # reached bottom edge?
-
-    # Check cell at (current_x, current_y)
-    move $a0, $s3       # x
-    move $a1, $s4       # y
-    move $a2, $s0       # color
-    jal check_cell_matches
-
-    beq $v0, $zero, tlbr_top_break  # no match, break run
-
-    # Cell matches - extend run
-    beq $t0, $zero, tlbr_top_start_run
-    addi $t0, $t0, 1    # run_length++
-    j tlbr_top_continue
-
-tlbr_top_start_run:
-    move $s5, $s3       # run_start_x = current_x
-    move $s6, $s4       # run_start_y = current_y
-    li $t0, 1           # run_length = 1
-    j tlbr_top_continue
-
-tlbr_top_break:
-    # Run broken - mark if length >= 3
-    blt $t0, 3, tlbr_top_no_mark
-    move $a0, $s5       # start_x
-    move $a1, $s6       # start_y
-    move $a2, $t0       # length
-    jal mark_diagonal_tlbr_run
-tlbr_top_no_mark:
-    li $t0, 0           # reset run_length
-    li $s5, -1          # reset run_start_x
-    li $s6, -1          # reset run_start_y
-
-tlbr_top_continue:
-    addi $s3, $s3, 1    # current_x++
-    addi $s4, $s4, 1    # current_y++
-    j tlbr_top_scan
-
-tlbr_top_end:
-    # Check if there's a run at end of diagonal
-    blt $t0, 3, tlbr_top_next
-    move $a0, $s5       # start_x
-    move $a1, $s6       # start_y
-    move $a2, $t0       # length
-    jal mark_diagonal_tlbr_run
-
-tlbr_top_next:
-    addi $s1, $s1, 1    # start_x++
-    j tlbr_top_row_loop
-
-tlbr_left_col_start:
-    # Second set: Diagonals starting from left column (x=0, y=1 to 11)
-    li $s1, 0           # start_x = 0
-    li $s2, 1           # start_y = 1 (skip 0,0 already covered)
-
-tlbr_left_col_loop:
-    bge $s2, 12, tlbr_done
-
-    # Scan diagonal starting at (0, start_y)
-    move $s3, $s1       # current_x = start_x
-    move $s4, $s2       # current_y = start_y
-    li $t0, 0           # run_length = 0
-    li $s5, -1          # run_start_x = -1
-    li $s6, -1          # run_start_y = -1
-
-tlbr_left_scan:
-    bge $s3, 6, tlbr_left_end       # reached right edge?
-    bge $s4, 12, tlbr_left_end      # reached bottom edge?
-
-    # Check cell at (current_x, current_y)
-    move $a0, $s3       # x
-    move $a1, $s4       # y
-    move $a2, $s0       # color
-    jal check_cell_matches
-
-    beq $v0, $zero, tlbr_left_break # no match, break run
-
-    # Cell matches - extend run
-    beq $t0, $zero, tlbr_left_start_run
-    addi $t0, $t0, 1    # run_length++
-    j tlbr_left_continue
-
-tlbr_left_start_run:
-    move $s5, $s3       # run_start_x = current_x
-    move $s6, $s4       # run_start_y = current_y
-    li $t0, 1           # run_length = 1
-    j tlbr_left_continue
-
-tlbr_left_break:
-    # Run broken - mark if length >= 3
-    blt $t0, 3, tlbr_left_no_mark
-    move $a0, $s5       # start_x
-    move $a1, $s6       # start_y
-    move $a2, $t0       # length
-    jal mark_diagonal_tlbr_run
-tlbr_left_no_mark:
-    li $t0, 0           # reset run_length
-    li $s5, -1          # reset run_start_x
-    li $s6, -1          # reset run_start_y
-
-tlbr_left_continue:
-    addi $s3, $s3, 1    # current_x++
-    addi $s4, $s4, 1    # current_y++
-    j tlbr_left_scan
-
-tlbr_left_end:
-    # Check if there's a run at end of diagonal
-    blt $t0, 3, tlbr_left_next
-    move $a0, $s5       # start_x
-    move $a1, $s6       # start_y
-    move $a2, $t0       # length
-    jal mark_diagonal_tlbr_run
-
-tlbr_left_next:
-    addi $s2, $s2, 1    # start_y++
-    j tlbr_left_col_loop
-
-tlbr_done:
-    lw $s6, 28($sp)
-    lw $s5, 24($sp)
-    lw $s4, 20($sp)
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 32
-    jr $ra
-
-
-####################################################################
-# Scan all DIAGONALS (top-right to bottom-left) for matches
-# Input: $a0 = target_color
-####################################################################
-scan_all_diagonals_trbl:
-    addi $sp, $sp, -32
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # target_color
-    sw $s1, 8($sp)      # start_x
-    sw $s2, 12($sp)     # start_y
-    sw $s3, 16($sp)     # current_x
-    sw $s4, 20($sp)     # current_y
-    sw $s5, 24($sp)     # run_start_x
-    sw $s6, 28($sp)     # run_start_y
-
-    move $s0, $a0       # target_color
-
-    # First set: Diagonals starting from top row (y=0, x=5 to 0)
-    li $s2, 0           # start_y = 0
-    li $s1, 5           # start_x = 5
-
-trbl_top_row_loop:
-    bltz $s1, trbl_right_col_start
-
-    # Scan diagonal starting at (start_x, 0)
-    move $s3, $s1       # current_x = start_x
-    move $s4, $s2       # current_y = start_y
-    li $t0, 0           # run_length = 0
-    li $s5, -1          # run_start_x = -1
-    li $s6, -1          # run_start_y = -1
-
-trbl_top_scan:
-    bltz $s3, trbl_top_end          # reached left edge?
-    bge $s4, 12, trbl_top_end       # reached bottom edge?
-
-    # Check cell at (current_x, current_y)
-    move $a0, $s3       # x
-    move $a1, $s4       # y
-    move $a2, $s0       # color
-    jal check_cell_matches
-
-    beq $v0, $zero, trbl_top_break  # no match, break run
-
-    # Cell matches - extend run
-    beq $t0, $zero, trbl_top_start_run
-    addi $t0, $t0, 1    # run_length++
-    j trbl_top_continue
-
-trbl_top_start_run:
-    move $s5, $s3       # run_start_x = current_x
-    move $s6, $s4       # run_start_y = current_y
-    li $t0, 1           # run_length = 1
-    j trbl_top_continue
-
-trbl_top_break:
-    # Run broken - mark if length >= 3
-    blt $t0, 3, trbl_top_no_mark
-    move $a0, $s5       # start_x
-    move $a1, $s6       # start_y
-    move $a2, $t0       # length
-    jal mark_diagonal_trbl_run
-trbl_top_no_mark:
-    li $t0, 0           # reset run_length
-    li $s5, -1          # reset run_start_x
-    li $s6, -1          # reset run_start_y
-
-trbl_top_continue:
-    addi $s3, $s3, -1   # current_x--
-    addi $s4, $s4, 1    # current_y++
-    j trbl_top_scan
-
-trbl_top_end:
-    # Check if there's a run at end of diagonal
-    blt $t0, 3, trbl_top_next
-    move $a0, $s5       # start_x
-    move $a1, $s6       # start_y
-    move $a2, $t0       # length
-    jal mark_diagonal_trbl_run
-
-trbl_top_next:
-    addi $s1, $s1, -1   # start_x--
-    j trbl_top_row_loop
-
-trbl_right_col_start:
-    # Second set: Diagonals starting from right column (x=5, y=1 to 11)
-    li $s1, 5           # start_x = 5
-    li $s2, 1           # start_y = 1 (skip 5,0 already covered)
-
-trbl_right_col_loop:
-    bge $s2, 12, trbl_done
-
-    # Scan diagonal starting at (5, start_y)
-    move $s3, $s1       # current_x = start_x
-    move $s4, $s2       # current_y = start_y
-    li $t0, 0           # run_length = 0
-    li $s5, -1          # run_start_x = -1
-    li $s6, -1          # run_start_y = -1
-
-trbl_right_scan:
-    bltz $s3, trbl_right_end        # reached left edge?
-    bge $s4, 12, trbl_right_end     # reached bottom edge?
-
-    # Check cell at (current_x, current_y)
-    move $a0, $s3       # x
-    move $a1, $s4       # y
-    move $a2, $s0       # color
-    jal check_cell_matches
-
-    beq $v0, $zero, trbl_right_break    # no match, break run
-
-    # Cell matches - extend run
-    beq $t0, $zero, trbl_right_start_run
-    addi $t0, $t0, 1    # run_length++
-    j trbl_right_continue
-
-trbl_right_start_run:
-    move $s5, $s3       # run_start_x = current_x
-    move $s6, $s4       # run_start_y = current_y
-    li $t0, 1           # run_length = 1
-    j trbl_right_continue
-
-trbl_right_break:
-    # Run broken - mark if length >= 3
-    blt $t0, 3, trbl_right_no_mark
-    move $a0, $s5       # start_x
-    move $a1, $s6       # start_y
-    move $a2, $t0       # length
-    jal mark_diagonal_trbl_run
-trbl_right_no_mark:
-    li $t0, 0           # reset run_length
-    li $s5, -1          # reset run_start_x
-    li $s6, -1          # reset run_start_y
-
-trbl_right_continue:
-    addi $s3, $s3, -1   # current_x--
-    addi $s4, $s4, 1    # current_y++
-    j trbl_right_scan
-
-trbl_right_end:
-    # Check if there's a run at end of diagonal
-    blt $t0, 3, trbl_right_next
-    move $a0, $s5       # start_x
-    move $a1, $s6       # start_y
-    move $a2, $t0       # length
-    jal mark_diagonal_trbl_run
-
-trbl_right_next:
-    addi $s2, $s2, 1    # start_y++
-    j trbl_right_col_loop
-
-trbl_done:
-    lw $s6, 28($sp)
-    lw $s5, 24($sp)
-    lw $s4, 20($sp)
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 32
-    jr $ra
-
-
-####################################################################
-# Scan for matches of one color (LINE-BASED)
-# Input: $s0 = target_color
-####################################################################
-scan_color_matches:
-    addi $sp, $sp, -8
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-
-    # Scan all rows
-    move $a0, $s0
-    jal scan_all_rows
-
-    # Scan all columns
-    move $a0, $s0
-    jal scan_all_columns
-
-    # Scan diagonals
-    move $a0, $s0
-    jal scan_all_diagonals_tlbr
-    move $a0, $s0
-    jal scan_all_diagonals_trbl
-
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 8
-    jr $ra
-
-
-check_if_any_marked:
-# check match_buffer has marked spot one by one
-# no input
-# return 1 when find one spot, 0 otherwise
-    la $t0, match_buffer
-    li $t1, 72                              # has 72 spot to check
-
-check_marked_loop:
-    beq $t1, $zero, no_marked_found         # go through all spots
-
-    lw $t2, 0($t0)
-    bne $t2, $zero, marked_found            # $t2 = 1, which is marked
-
-    addi $t0, $t0, 4                        # move to next spot
-    addi $t1, $t1, -1                       # counter-1
-    j check_marked_loop
-
-
-no_marked_found:
-    li $v0, 0
-    jr $ra
-
-marked_found:
-    li $v0, 1
-    jr $ra
-
-
-flash_marked_gems:
-# Flash marked gems in white to show what will be cleared
-# NEW: Use set_cell(x, y, color) directly
-    addi $sp, $sp, -16
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-    sw $s1, 8($sp)
-    sw $s2, 12($sp)
-
-    la $t0, COLOR_WHITE
-    lw $s2, 0($t0)          # $s2 = white color
-    li $s0, 0               # $s0 = y (row)
-
-flash_row_loop:
-    bge $s0, 12, flash_done
-    li $s1, 0               # $s1 = x (col)
-
-flash_col_loop:
-    bge $s1, 6, flash_next_row
-
-    # Calculate offset in match_buffer: (y * 6 + x) * 4
-    li $t0, 6
-    mul $t1, $s0, $t0       # y * 6
-    add $t1, $t1, $s1       # y * 6 + x
-    sll $t1, $t1, 2         # (y * 6 + x) * 4
-
-    # Check if this position is marked
-    la $t0, match_buffer
-    add $t0, $t0, $t1
-    lw $t2, 0($t0)
-
-    beq $t2, $zero, flash_col_next
-
-    # Flash this gem to white - set_cell(x, y, color)
-    add $a0, $s1, $zero     # a0 = x
-    add $a1, $s0, $zero     # a1 = y
-    add $a2, $s2, $zero     # a2 = white
-    jal set_cell
-
-flash_col_next:
-    addi $s1, $s1, 1        # x++
-    j flash_col_loop
-
-flash_next_row:
-    addi $s0, $s0, 1        # y++
-    j flash_row_loop
-
-flash_done:
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 16
-    jr $ra
-
-
-clear_marked_gems:
-# clear all marked gems, and set them to be 0
-# NEW: Use set_cell(x, y, color) directly
-    addi $sp, $sp, -16
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)          # Use $s0 for y (row)
-    sw $s1, 8($sp)          # Use $s1 for x (col)
-    sw $s2, 12($sp)         # Use $s2 for marked flag
-
-    li $s0, 0               # $s0 = y (row)
-
-clear_marked_row_loop:
-    bge $s0, 12, clear_marked_done
-
-    li $s1, 0               # $s1 = x (col)
-
-clear_marked_col_loop:
-    bge $s1, 6, clear_marked_next_row
-
-    # Calculate offset in match_buffer: (y * 6 + x) * 4
-    li $t0, 6
-    mul $t1, $s0, $t0       # y * 6
-    add $t1, $t1, $s1       # y * 6 + x
-    sll $t1, $t1, 2         # (y * 6 + x) * 4
-
-    # Check if this position is marked
-    la $t0, match_buffer
-    add $t0, $t0, $t1
-    lw $s2, 0($t0)          # Save marked flag in $s2
-
-    beq $s2, $zero, clear_marked_col_next
-
-    # Clear the gem at this position - set_cell(x, y, 0)
-    add $a0, $s1, $zero     # a0 = x
-    add $a1, $s0, $zero     # a1 = y
-    li $a2, 0               # a2 = 0 (empty)
-    jal set_cell
-
-clear_marked_col_next:
-    addi $s1, $s1, 1        # x++
-    j clear_marked_col_loop
-
-clear_marked_next_row:
-    addi $s0, $s0, 1        # y++
-    j clear_marked_row_loop
-
-clear_marked_done:
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 16
-    jr $ra
-
-
-apply_gravity:
-# NEW: Use get_cell(x, y) and set_cell(x, y, color) directly
-    addi $sp, $sp, -20
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)              # $s0 = x (current column)
-    sw $s1, 8($sp)              # $s1 = write_y (where to place next gem)
-    sw $s2, 12($sp)             # $s2 = read_y (scanning for gems)
-    sw $s3, 16($sp)             # $s3 = color
-
-    li $s0, 0                   # start with column 0 (x=0)
-
-gravity_column_loop:
-    bge $s0, 6, gravity_complete    # processed all 6 columns?
-
-    # For this column, compact all gems downward
-    li $s1, 11                  # write_y starts at bottom (row 11)
-    li $s2, 11                  # read_y starts at bottom too
-
-gravity_scan_loop:
-    bltz $s2, gravity_next_column   # scanned all rows in this column?
-
-    # Get color at current read position - get_cell(x, y)
-    add $a0, $s0, $zero         # a0 = x (current column)
-    add $a1, $s2, $zero         # a1 = y (read_y)
-    jal get_cell
-    add $s3, $v0, $zero         # save color
-
-    beq $s3, $zero, gravity_scan_next   # empty? skip
-
-    # Found a gem at read_y, need to move it to write_y
-    bne $s1, $s2, gravity_move_gem      # same position? no need to move
-
-    # Same position, just decrement write_y
-    addi $s1, $s1, -1
-    j gravity_scan_next
-
-gravity_move_gem:
-    # Move gem from read_y to write_y
-    # Set gem at write_y - set_cell(x, y, color)
-    add $a0, $s0, $zero         # a0 = x (current column)
-    add $a1, $s1, $zero         # a1 = y (write_y)
-    add $a2, $s3, $zero         # a2 = color
-    jal set_cell
-
-    # Clear gem at read_y - set_cell(x, y, 0)
-    add $a0, $s0, $zero         # a0 = x (current column)
-    add $a1, $s2, $zero         # a1 = y (read_y)
-    li $a2, 0                   # a2 = 0 (empty)
-    jal set_cell
-
-    # Move write_y up
-    addi $s1, $s1, -1
-
-gravity_scan_next:
-    addi $s2, $s2, -1           # move read_y up
-    j gravity_scan_loop
-
-gravity_next_column:
-    addi $s0, $s0, 1            # next column (x++)
-    j gravity_column_loop
-
-gravity_complete:
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 20
-    jr $ra
-
-
-apply_auto_gravity:
-    addi $sp, $sp, -8
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-
-    # Load and increment gravity counter
-    lw $t0, gravity_counter
-    lw $t1, gravity_speed
-    addi $t0, $t0, 1
-    sw $t0, gravity_counter
-
-    # Check if it's time to fall
-    blt $t0, $t1, auto_gravity_done
-
-    # Reset counter
-    sw $zero, gravity_counter
-
-    # Move column down by 1
-    lw $t2, column_y
-    li $t3, 9  # Max y position (same as in respond_s)
-    beq $t2, $t3, auto_gravity_done
-    addi $t2, $t2, 1
-    sw $t2, column_y
-
-auto_gravity_done:
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 8
-    jr $ra
-
-
-check_game_over:
-# check if game is over
-# return $v0 = 1 (game over), 0 (continue)
+##############################################################################
+# Input handling
+##############################################################################
+handle_input:
+    lw $t0, ADDR_KBRD
+    lw $t1, 0($t0)
+    beq $t1, $zero, handle_input_done
+
+    lw $t2, 4($t0)
+    beq $t2, 0x61, move_left      # a
+    beq $t2, 0x64, move_right     # d
+    beq $t2, 0x73, soft_drop      # s
+    beq $t2, 0x77, rotate_column  # w
+    beq $t2, 0x71, quit_game      # q
+    j handle_input_done
+
+move_left:
     addi $sp, $sp, -4
     sw $ra, 0($sp)
-
-    # check row 0
-    li $t0, 0               # row = 0
-    li $t1, 0               # col = 0
-
-check_top_row:
-    bge $t1, 6, check_row_1
-
-    add $a0, $t0, $zero
-    add $a1, $t1, $zero
-    jal get_field_color
-
-    bne $v0, $zero, game_over_detected  # if row 0 has gem, game over
-
-    addi $t1, $t1, 1
-    j check_top_row
-
-check_row_1:
-    # check row 1
-    li $t0, 1
-    li $t1, 0
-
-check_row_1_loop:
-    bge $t1, 6, check_row_2
-
-    add $a0, $t0, $zero
-    add $a1, $t1, $zero
-    jal get_field_color
-
-    bne $v0, $zero, game_over_detected
-
-    addi $t1, $t1, 1
-    j check_row_1_loop
-
-check_row_2:
-    # check row 2
-    li $t0, 2
-    li $t1, 0
-
-check_row_2_loop:
-    bge $t1, 6, no_game_over
-
-    add $a0, $t0, $zero
-    add $a1, $t1, $zero
-    jal get_field_color
-
-    bne $v0, $zero, game_over_detected
-
-    addi $t1, $t1, 1
-    j check_row_2_loop
-
-no_game_over:
+    lw $t3, column_x
+    beq $t3, $zero, move_left_exit
+    addi $a0, $t3, -1
+    jal check_horizontal_collision
+    bne $v0, $zero, move_left_exit
+    addi $t3, $t3, -1
+    sw $t3, column_x
+move_left_exit:
     lw $ra, 0($sp)
     addi $sp, $sp, 4
-    li $v0, 0
+    j handle_input_done
+
+move_right:
+    addi $sp, $sp, -4
+    sw $ra, 0($sp)
+    lw $t3, column_x
+    lw $t4, BOARD_WIDTH
+    addi $t4, $t4, -1
+    beq $t3, $t4, move_right_exit
+    addi $a0, $t3, 1
+    jal check_horizontal_collision
+    bne $v0, $zero, move_right_exit
+    addi $t3, $t3, 1
+    sw $t3, column_x
+move_right_exit:
+    lw $ra, 0($sp)
+    addi $sp, $sp, 4
+    j handle_input_done
+
+soft_drop:
+    addi $sp, $sp, -4
+    sw $ra, 0($sp)
+    jal try_step_down
+    lw $ra, 0($sp)
+    addi $sp, $sp, 4
+    j handle_input_done
+
+rotate_column:
+    lw $t0, current_column
+    lw $t1, current_column+4
+    lw $t2, current_column+8
+    sw $t2, current_column
+    sw $t0, current_column+4
+    sw $t1, current_column+8
+    j handle_input_done
+
+quit_game:
+    li $v0, 10
+    syscall
+
+handle_input_done:
     jr $ra
 
-game_over_detected:
-    lw $ra, 0($sp)
-    addi $sp, $sp, 4
+##############################################################################
+# Gravity and collision
+##############################################################################
+apply_auto_gravity:
+    lw $t0, gravity_counter
+    addi $t0, $t0, 1
+    lw $t1, gravity_speed
+    blt $t0, $t1, store_counter
+    li $t0, 0
+    jal try_step_down
+store_counter:
+    sw $t0, gravity_counter
+    jr $ra
+
+try_step_down:
+    addi $sp, $sp, -4
+    sw $ra, 0($sp)
+    jal check_falling_collision
+    bne $v0, $zero, try_step_down_blocked
+    lw $t0, column_y
+    addi $t0, $t0, 1
+    sw $t0, column_y
     li $v0, 1
+    j try_step_down_done
+try_step_down_blocked:
+    li $v0, 0
+try_step_down_done:
+    lw $ra, 0($sp)
+    addi $sp, $sp, 4
     jr $ra
 
+check_falling_collision:
+    lw $t0, column_y
+    lw $t1, BOARD_HEIGHT
+    lw $t2, BOARD_WIDTH
+    lw $t3, column_x
+    li $v0, 0
+    li $t4, 0
+check_fall_loop:
+    beq $t4, 3, check_fall_done
+    add $t5, $t0, $t4
+    addi $t6, $t5, 1
+    bge $t6, $t1, fall_collide
+    blt $t6, $zero, check_next_seg
+    mul $t7, $t6, $t2
+    add $t7, $t7, $t3
+    sll $t7, $t7, 2
+    la $t8, game_field
+    add $t8, $t8, $t7
+    lw $t9, 0($t8)
+    bne $t9, $zero, fall_collide
+check_next_seg:
+    addi $t4, $t4, 1
+    j check_fall_loop
+fall_collide:
+    li $v0, 1
+check_fall_done:
+    jr $ra
 
+check_horizontal_collision:
+    lw $t0, column_y
+    lw $t1, BOARD_HEIGHT
+    lw $t2, BOARD_WIDTH
+    move $t3, $a0
+    bltz $t3, horiz_block
+    bge $t3, $t2, horiz_block
+    li $v0, 0
+    li $t4, 0
+horiz_loop:
+    beq $t4, 3, horiz_done
+    add $t5, $t0, $t4
+    bltz $t5, horiz_next
+    bge $t5, $t1, horiz_block
+    mul $t6, $t5, $t2
+    add $t6, $t6, $t3
+    sll $t6, $t6, 2
+    la $t7, game_field
+    add $t7, $t7, $t6
+    lw $t8, 0($t7)
+    bne $t8, $zero, horiz_block
+horiz_next:
+    addi $t4, $t4, 1
+    j horiz_loop
+horiz_block:
+    li $v0, 1
+horiz_done:
+    jr $ra
+
+##############################################################################
+# Locking and matches
+##############################################################################
+lock_column_to_field:
+    addi $sp, $sp, -4
+    sw $ra, 0($sp)
+    lw $t0, column_y
+    lw $t1, column_x
+    lw $t2, BOARD_WIDTH
+    la $t3, game_field
+    li $t4, 0
+lock_loop:
+    beq $t4, 3, lock_done
+    add $t5, $t0, $t4
+    bltz $t5, skip_lock
+    mul $t6, $t5, $t2
+    add $t6, $t6, $t1
+    sll $t6, $t6, 2
+    add $t7, $t3, $t6
+    sll $t8, $t4, 2
+    lw $t9, current_column($t8)
+    sw $t9, 0($t7)
+skip_lock:
+    addi $t4, $t4, 1
+    j lock_loop
+lock_done:
+    li $t0, -2
+    sw $t0, column_y
+    li $t1, 2
+    sw $t1, column_x
+    lw $ra, 0($sp)
+    addi $sp, $sp, 4
+    jr $ra
+
+check_and_clear_matches:
+    addi $sp, $sp, -4
+    sw $ra, 0($sp)
+    jal clear_match_buffer
+    jal find_matches
+    beq $v0, $zero, check_clear_done
+    jal clear_marked_cells
+    jal apply_board_gravity
+check_clear_done:
+    lw $ra, 0($sp)
+    addi $sp, $sp, 4
+    jr $ra
+
+clear_match_buffer:
+    la $t0, match_buffer
+    li $t1, 72
+    li $t2, 0
+clear_match_loop:
+    beq $t2, $t1, clear_match_done
+    sw $zero, 0($t0)
+    addi $t0, $t0, 4
+    addi $t2, $t2, 1
+    j clear_match_loop
+clear_match_done:
+    jr $ra
+
+find_matches:
+    lw $t0, BOARD_WIDTH
+    lw $t1, BOARD_HEIGHT
+    la $t2, game_field
+    la $t3, match_buffer
+    li $v0, 0
+    li $t4, 0
+find_row_loop:
+    beq $t4, $t1, find_done
+    li $t5, 0
+find_col_loop:
+    beq $t5, $t0, next_row
+    mul $t6, $t4, $t0
+    add $t6, $t6, $t5
+    sll $t7, $t6, 2
+    add $t8, $t2, $t7
+    lw $t9, 0($t8)
+    beq $t9, $zero, advance_col
+
+    addi $s0, $t5, 1
+    li $s1, 1
+horiz_scan:
+    beq $s0, $t0, horiz_eval
+    mul $s2, $t4, $t0
+    add $s2, $s2, $s0
+    sll $s2, $s2, 2
+    add $s3, $t2, $s2
+    lw $s4, 0($s3)
+    bne $s4, $t9, horiz_eval
+    addi $s1, $s1, 1
+    addi $s0, $s0, 1
+    j horiz_scan
+horiz_eval:
+    blt $s1, 3, vert_check
+    li $v0, 1
+    li $s5, 0
+mark_horiz:
+    beq $s5, $s1, vert_check
+    mul $s6, $t4, $t0
+    add $s6, $s6, $t5
+    add $s6, $s6, $s5
+    sll $s6, $s6, 2
+    add $s7, $t3, $s6
+    sw $t9, 0($s7)
+    addi $s5, $s5, 1
+    j mark_horiz
+
+vert_check:
+    addi $s0, $t4, 1
+    li $s1, 1
+vert_scan:
+    beq $s0, $t1, vert_eval
+    mul $s2, $s0, $t0
+    add $s2, $s2, $t5
+    sll $s2, $s2, 2
+    add $s3, $t2, $s2
+    lw $s4, 0($s3)
+    bne $s4, $t9, vert_eval
+    addi $s1, $s1, 1
+    addi $s0, $s0, 1
+    j vert_scan
+vert_eval:
+    blt $s1, 3, advance_col
+    li $v0, 1
+    li $s5, 0
+mark_vert:
+    beq $s5, $s1, advance_col
+    mul $s6, $t4, $t0
+    add $s6, $s6, $t5
+    mul $s7, $s5, $t0
+    add $s6, $s6, $s7
+    sll $s6, $s6, 2
+    add $s7, $t3, $s6
+    sw $t9, 0($s7)
+    addi $s5, $s5, 1
+    j mark_vert
+
+advance_col:
+    addi $t5, $t5, 1
+    j find_col_loop
+next_row:
+    addi $t4, $t4, 1
+    j find_row_loop
+find_done:
+    jr $ra
+
+clear_marked_cells:
+    la $t2, game_field
+    la $t3, match_buffer
+    li $t5, 0
+clear_mark_loop:
+    beq $t5, 72, clear_mark_done
+    sll $t6, $t5, 2
+    add $t7, $t2, $t6
+    add $t8, $t3, $t6
+    lw $t9, 0($t8)
+    beq $t9, $zero, no_clear
+    sw $zero, 0($t7)
+no_clear:
+    addi $t5, $t5, 1
+    j clear_mark_loop
+clear_mark_done:
+    jr $ra
+
+apply_board_gravity:
+    lw $t0, BOARD_WIDTH
+    lw $t1, BOARD_HEIGHT
+    la $t2, game_field
+    li $t3, 0                 # column index
+column_loop:
+    beq $t3, $t0, gravity_done
+    addi $t4, $t1, -1         # row pointer (scan from bottom)
+    addi $t5, $t1, -1         # write pointer
+col_scan:
+    bltz $t4, fill_remainder
+    mul $t6, $t4, $t0
+    add $t6, $t6, $t3
+    sll $t6, $t6, 2
+    add $t7, $t2, $t6
+    lw $t8, 0($t7)
+    beq $t8, $zero, next_scan_row
+    # move value to write pointer if different row
+    mul $t9, $t5, $t0
+    add $t9, $t9, $t3
+    sll $t9, $t9, 2
+    add $s0, $t2, $t9
+    sw $t8, 0($s0)
+    beq $t7, $s0, keep_write
+    sw $zero, 0($t7)
+keep_write:
+    addi $t5, $t5, -1
+next_scan_row:
+    addi $t4, $t4, -1
+    j col_scan
+fill_remainder:
+    bltz $t5, next_column
+    mul $t6, $t5, $t0
+    add $t6, $t6, $t3
+    sll $t6, $t6, 2
+    add $t7, $t2, $t6
+    sw $zero, 0($t7)
+    addi $t5, $t5, -1
+    j fill_remainder
+next_column:
+    addi $t3, $t3, 1
+    j column_loop
+gravity_done:
+    jr $ra
+
+##############################################################################
+# Drawing helpers
+##############################################################################
+clear_screen:
+    lw $t0, ADDR_DSPL
+    li $t1, 0
+clear_loop:
+    beq $t1, 1024, clear_done
+    sw $zero, 0($t0)
+    addi $t0, $t0, 4
+    addi $t1, $t1, 1
+    j clear_loop
+clear_done:
+    jr $ra
+
+draw_border:
+    lw $t0, ADDR_DSPL
+    lw $t1, CELL_SIZE
+    lw $t4, BOARD_WIDTH
+    lw $t5, BOARD_HEIGHT
+    lw $t3, COLOR_WHITE
+
+    li $t2, 0
+border_left_loop:
+    beq $t2, $t5, border_right
+    mul $t6, $t2, 32
+    mul $t6, $t6, $t1
+    sll $t6, $t6, 2
+    add $t7, $t0, $t6
+    sw $t3, 0($t7)
+    addi $t2, $t2, 1
+    j border_left_loop
+
+border_right:
+    li $t2, 0
+    addi $t8, $t4, 1
+border_right_loop:
+    beq $t2, $t5, border_bottom
+    mul $t6, $t2, 32
+    mul $t6, $t6, $t1
+    add $t6, $t6, $t8
+    sll $t6, $t6, 2
+    add $t7, $t0, $t6
+    sw $t3, 0($t7)
+    addi $t2, $t2, 1
+    j border_right_loop
+
+border_bottom:
+    li $t2, 0
+    addi $t9, $t5, 1
+border_bottom_loop:
+    bgt $t2, $t4, border_done
+    mul $s0, $t9, 32
+    mul $s0, $s0, $t1
+    add $s0, $s0, $t2
+    sll $s0, $s0, 2
+    add $s1, $t0, $s0
+    sw $t3, 0($s1)
+    addi $t2, $t2, 1
+    j border_bottom_loop
+border_done:
+    jr $ra
+
+draw_game_field:
+    lw $t0, BOARD_WIDTH
+    lw $t1, BOARD_HEIGHT
+    la $t2, game_field
+    li $t3, 0
+row_draw_loop:
+    beq $t3, $t1, draw_game_done
+    li $t4, 0
+col_draw_loop:
+    beq $t4, $t0, next_draw_row
+    mul $t5, $t3, $t0
+    add $t5, $t5, $t4
+    sll $t6, $t5, 2
+    add $t7, $t2, $t6
+    lw $t8, 0($t7)
+    beq $t8, $zero, skip_cell
+    move $a0, $t4
+    move $a1, $t3
+    move $a2, $t8
+    jal draw_cell
+skip_cell:
+    addi $t4, $t4, 1
+    j col_draw_loop
+next_draw_row:
+    addi $t3, $t3, 1
+    j row_draw_loop
+draw_game_done:
+    jr $ra
+
+draw_current_column:
+    lw $t0, column_x
+    lw $t1, column_y
+    li $t2, 0
+column_draw_loop:
+    beq $t2, 3, column_draw_done
+    add $t3, $t1, $t2
+    bltz $t3, draw_next_seg
+    lw $t4, BOARD_HEIGHT
+    bge $t3, $t4, draw_next_seg
+    sll $t5, $t2, 2
+    lw $t6, current_column($t5)
+    move $a0, $t0
+    move $a1, $t3
+    move $a2, $t6
+    jal draw_cell
+draw_next_seg:
+    addi $t2, $t2, 1
+    j column_draw_loop
+column_draw_done:
+    jr $ra
+
+draw_cell:
+    addi $sp, $sp, -4
+    sw $ra, 0($sp)
+    lw $t0, ADDR_DSPL
+    lw $t1, CELL_SIZE
+    addi $t2, $a0, 1
+    addi $t3, $a1, 1
+    mul $t4, $t3, 32
+    mul $t4, $t4, $t1
+    add $t4, $t4, $t2
+    sll $t4, $t4, 2
+    add $t6, $t0, $t4
+    sw $a2, 0($t6)
+    lw $ra, 0($sp)
+    addi $sp, $sp, 4
+    jr $ra
+
+##############################################################################
+# Column spawning
+##############################################################################
 generate_new_column:
-# generate a new 3 column
-    addi $sp, $sp, -16
+    addi $sp, $sp, -4
     sw $ra, 0($sp)
-    sw $s0, 4($sp)              # $s0 = random color index
-    sw $s1, 8($sp)              # $s1 = color 1
-    sw $s2, 12($sp)             # $s2 = color 2
-
-    li $v0, 42                  # syscall: random int in range
-    li $a0, 0                   # generator ID = 0
-    li $a1, 6                   # upper bound = 6
-    syscall
-    add $s0, $a0, $zero
-    jal get_color_value
-    add $s1, $v0, $zero
-
-    li $v0, 42                  # syscall: random int in range
-    li $a0, 0                   # generator ID = 0
-    li $a1, 6                   # upper bound = 6
-    syscall
-    add $s0, $a0, $zero
-    jal get_color_value
-    add $s2, $v0, $zero
-    # get color 3
-    li $v0, 42                  # syscall: random int in range
-    li $a0, 0                   # generator ID = 0
-    li $a1, 6                   # upper bound = 6
-    syscall
-    add $s0, $a0, $zero
-    jal get_color_value
-    # $v0 = color 3
-
-    la $t0, current_column
-    sw $s1, 0($t0)
-    sw $s2, 4($t0)
-    sw $v0, 8($t0)
-
-    li $t0, 2
-    sw $t0, column_x
-    sw $zero, column_y
-
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
+    li $t0, 0
+spawn_loop:
+    beq $t0, 3, spawn_done
+    jal next_color
+    sll $t1, $t0, 2
+    sw $v0, current_column($t1)
+    addi $t0, $t0, 1
+    j spawn_loop
+spawn_done:
+    li $t1, -2
+    sw $t1, column_y
+    li $t2, 2
+    sw $t2, column_x
     lw $ra, 0($sp)
-    addi $sp, $sp, 16
+    addi $sp, $sp, 4
     jr $ra
 
-
-get_color_value:
-# make color index(0~5) be actual color
-# input $s0 = color index
-# return $v0 = color
-    beq $s0, 0, gv_red
-    beq $s0, 1, gv_orange
-    beq $s0, 2, gv_yellow
-    beq $s0, 3, gv_green
-    beq $s0, 4, gv_blue
-    # default, purpule
-    li $v0, 0x8800ff
+next_color:
+    lw $t0, palette_index
+    lw $t1, palette_len
+    rem $t2, $t0, $t1
+    sll $t3, $t2, 2
+    la $t4, palette
+    add $t4, $t4, $t3
+    lw $v0, 0($t4)
+    addi $t0, $t0, 1
+    sw $t0, palette_index
     jr $ra
 
-gv_red:
-    la $t0, COLOR_RED
-    lw $v0, 0($t0)          # Then load value from that address
-    jr $ra
-gv_orange:
-    la $t0, COLOR_ORANGE
-    lw $v0, 0($t0)
-    jr $ra
-gv_yellow:
-    la $t0, COLOR_YELLOW
-    lw $v0, 0($t0)
-    jr $ra
-gv_green:
-    la $t0, COLOR_GREEN
-    lw $v0, 0($t0)
-    jr $ra
-gv_blue:
-    la $t0, COLOR_BLUE
-    lw $v0, 0($t0)
-    jr $ra
-
-
-check_initial_collision:
-# Check if the newly generated column at starting position collides
-# return $v0 = 1 if collision (game over), 0 if OK
-# NEW: Use get_cell(x, y)
-    addi $sp, $sp, -12
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)
-    sw $s1, 8($sp)
-
-    # Get the starting position (should be x=2, y=0)
-    lw $s0, column_x    # $s0 = x (should be 2)
-    lw $s1, column_y    # $s1 = y (should be 0)
-
-    # Check if any of the three positions of the new column are occupied
-    # Check top gem position - get_cell(x, y)
-    add $a0, $s0, $zero     # a0 = x
-    add $a1, $s1, $zero     # a1 = y
-    jal get_cell
-    bne $v0, $zero, initial_collision_detected
-
-    # Check middle gem position (y + 1)
-    add $a0, $s0, $zero     # a0 = x
-    addi $a1, $s1, 1        # a1 = y + 1
-    jal get_cell
-    bne $v0, $zero, initial_collision_detected
-
-    # Check bottom gem position (y + 2)
-    add $a0, $s0, $zero     # a0 = x
-    addi $a1, $s1, 2        # a1 = y + 2
-    jal get_cell
-    bne $v0, $zero, initial_collision_detected
-
-    # No collision, game continues
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 12
+check_spawn_collision:
+    lw $t0, column_x
+    lw $t1, column_y
+    lw $t2, BOARD_WIDTH
+    lw $t3, BOARD_HEIGHT
+    la $t4, game_field
     li $v0, 0
-    jr $ra
-
-initial_collision_detected:
-    # Collision detected at spawn point = game over
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 12
+    li $t5, 0
+spawn_check_loop:
+    beq $t5, 3, spawn_check_done
+    add $t6, $t1, $t5
+    bltz $t6, spawn_next
+    bge $t6, $t3, spawn_next
+    mul $t7, $t6, $t2
+    add $t7, $t7, $t0
+    sll $t7, $t7, 2
+    add $t8, $t4, $t7
+    lw $t9, 0($t8)
+    beq $t9, $zero, spawn_next
     li $v0, 1
+    j spawn_check_done
+spawn_next:
+    addi $t5, $t5, 1
+    j spawn_check_loop
+spawn_check_done:
     jr $ra
