@@ -849,27 +849,27 @@ scan_all_color_matches:
 
     la $t0, COLOR_RED
     lw $s0, 0($t0)
-    jal scan_color_matches
+    jal scan_matches_by_color
 
     la $t0, COLOR_ORANGE
     lw $s0, 0($t0)
-    jal scan_color_matches
+    jal scan_matches_by_color
 
     la $t0, COLOR_YELLOW
     lw $s0, 0($t0)
-    jal scan_color_matches
+    jal scan_matches_by_color
 
     la $t0, COLOR_GREEN
     lw $s0, 0($t0)
-    jal scan_color_matches
+    jal scan_matches_by_color
 
     la $t0, COLOR_BLUE
     lw $s0, 0($t0)
-    jal scan_color_matches
+    jal scan_matches_by_color
 
     la $t0, COLOR_PURPLE
     lw $s0, 0($t0)
-    jal scan_color_matches
+    jal scan_matches_by_color
 
     lw $s0, 4($sp)
     lw $ra, 0($sp)
@@ -896,419 +896,361 @@ init_match_done:
     jr $ra
 
 
-####################################################################
-# COMPLETELY REWRITTEN MATCH DETECTION SYSTEM
-# Simple, clear, and correct
-####################################################################
-
-# COORDINATE SYSTEM:
-# - game_field and match_buffer both use [y][x] storage
-# - Offset = (y * 6 + x) * 4
-# - We use get_cell(x, y) to read, but mark_buffer uses (y, x) indexing
-
-####################################################################
-# Helper: Check if cell at (x, y) has target color
-# Input: $a0 = x, $a1 = y, $a2 = target_color
-# Output: $v0 = 1 if match, 0 if not
-####################################################################
-check_cell_matches:
-    addi $sp, $sp, -8
-    sw $ra, 0($sp)
-    sw $a2, 4($sp)      # Save target color
-
-    jal get_cell        # get_cell(x, y)
-    lw $a2, 4($sp)      # Restore target color
-
-    # Compare
-    beq $v0, $a2, cell_matches
-    li $v0, 0           # No match
-    j cell_matches_done
-
-cell_matches:
-    li $v0, 1           # Match!
-
-cell_matches_done:
-    lw $ra, 0($sp)
-    addi $sp, $sp, 8
-    jr $ra
-
-
-####################################################################
-# Helper: Mark cell at (x, y) for deletion
-# Input: $a0 = x, $a1 = y
-####################################################################
-mark_cell:
-    # Calculate offset = (y * 6 + x) * 4
-    li $t0, 6
-    mul $t1, $a1, $t0       # y * 6
-    add $t1, $t1, $a0       # y * 6 + x
-    sll $t1, $t1, 2         # (y * 6 + x) * 4
-
-    # Mark in match_buffer
-    la $t0, match_buffer
-    add $t0, $t0, $t1
-    li $t2, 1
-    sw $t2, 0($t0)
-
-    jr $ra
-
-
-####################################################################
-# Check and mark HORIZONTAL matches starting at (x, y)
-# Input: $a0 = x, $a1 = y, $a2 = target_color
-####################################################################
-check_horizontal_match:
-    addi $sp, $sp, -24
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # start_x
-    sw $s1, 8($sp)      # start_y
-    sw $s2, 12($sp)     # target_color
-    sw $s3, 16($sp)     # match_count
-    sw $s4, 20($sp)     # current_x
-
-    move $s0, $a0       # start_x
-    move $s1, $a1       # start_y
-    move $s2, $a2       # target_color
-
-    # Check starting cell
-    move $a0, $s0
-    move $a1, $s1
-    move $a2, $s2
-    jal check_cell_matches
-    beq $v0, $zero, horiz_no_match
-
-    # Count matches to the right
-    li $s3, 1           # count = 1
-    addi $s4, $s0, 1    # current_x = start_x + 1
-
-horiz_count_loop:
-    bge $s4, 6, horiz_count_done    # reached edge?
-
-    move $a0, $s4       # x = current_x
-    move $a1, $s1       # y = start_y
-    move $a2, $s2       # color
-    jal check_cell_matches
-    beq $v0, $zero, horiz_count_done    # no match?
-
-    addi $s3, $s3, 1    # count++
-    addi $s4, $s4, 1    # current_x++
-    j horiz_count_loop
-
-horiz_count_done:
-    # Need at least 3
-    blt $s3, 3, horiz_no_match
-
-    # Mark all matched cells
-    move $s4, $s0       # current_x = start_x
-    li $t0, 0           # offset = 0
-
-horiz_mark_loop:
-    bge $t0, $s3, horiz_no_match    # marked all?
-
-    move $a0, $s4       # x
-    move $a1, $s1       # y
-    jal mark_cell
-
-    addi $s4, $s4, 1    # current_x++
-    addi $t0, $t0, 1    # offset++
-    j horiz_mark_loop
-
-horiz_no_match:
-    lw $s4, 20($sp)
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 24
-    jr $ra
-
-
-####################################################################
-# Check and mark VERTICAL matches starting at (x, y)
-# Input: $a0 = x, $a1 = y, $a2 = target_color
-####################################################################
-check_vertical_match:
-    addi $sp, $sp, -24
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # start_x
-    sw $s1, 8($sp)      # start_y
-    sw $s2, 12($sp)     # target_color
-    sw $s3, 16($sp)     # match_count
-    sw $s4, 20($sp)     # current_y
-
-    move $s0, $a0       # start_x
-    move $s1, $a1       # start_y
-    move $s2, $a2       # target_color
-
-    # Check starting cell
-    move $a0, $s0
-    move $a1, $s1
-    move $a2, $s2
-    jal check_cell_matches
-    beq $v0, $zero, vert_no_match
-
-    # Count matches downward
-    li $s3, 1           # count = 1
-    addi $s4, $s1, 1    # current_y = start_y + 1
-
-vert_count_loop:
-    bge $s4, 12, vert_count_done    # reached edge?
-
-    move $a0, $s0       # x = start_x
-    move $a1, $s4       # y = current_y
-    move $a2, $s2       # color
-    jal check_cell_matches
-    beq $v0, $zero, vert_count_done     # no match?
-
-    addi $s3, $s3, 1    # count++
-    addi $s4, $s4, 1    # current_y++
-    j vert_count_loop
-
-vert_count_done:
-    # Need at least 3
-    blt $s3, 3, vert_no_match
-
-    # Mark all matched cells
-    move $s4, $s1       # current_y = start_y
-    li $t0, 0           # offset = 0
-
-vert_mark_loop:
-    bge $t0, $s3, vert_no_match     # marked all?
-
-    move $a0, $s0       # x
-    move $a1, $s4       # y
-    jal mark_cell
-
-    addi $s4, $s4, 1    # current_y++
-    addi $t0, $t0, 1    # offset++
-    j vert_mark_loop
-
-vert_no_match:
-    lw $s4, 20($sp)
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 24
-    jr $ra
-
-
-####################################################################
-# Check and mark DIAGONAL matches (top-left to bottom-right)
-# Input: $a0 = x, $a1 = y, $a2 = target_color
-####################################################################
-check_diagonal_tlbr_match:
-    addi $sp, $sp, -28
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # start_x
-    sw $s1, 8($sp)      # start_y
-    sw $s2, 12($sp)     # target_color
-    sw $s3, 16($sp)     # match_count
-    sw $s4, 20($sp)     # current_x
-    sw $s5, 24($sp)     # current_y
-
-    move $s0, $a0       # start_x
-    move $s1, $a1       # start_y
-    move $s2, $a2       # target_color
-
-    # Check starting cell
-    move $a0, $s0
-    move $a1, $s1
-    move $a2, $s2
-    jal check_cell_matches
-    beq $v0, $zero, diag_tlbr_no_match
-
-    # Count matches diagonally (down-right)
-    li $s3, 1           # count = 1
-    addi $s4, $s0, 1    # current_x = start_x + 1
-    addi $s5, $s1, 1    # current_y = start_y + 1
-
-diag_tlbr_count_loop:
-    bge $s4, 6, diag_tlbr_count_done    # reached right edge?
-    bge $s5, 12, diag_tlbr_count_done   # reached bottom edge?
-
-    move $a0, $s4       # x = current_x
-    move $a1, $s5       # y = current_y
-    move $a2, $s2       # color
-    jal check_cell_matches
-    beq $v0, $zero, diag_tlbr_count_done    # no match?
-
-    addi $s3, $s3, 1    # count++
-    addi $s4, $s4, 1    # current_x++
-    addi $s5, $s5, 1    # current_y++
-    j diag_tlbr_count_loop
-
-diag_tlbr_count_done:
-    # Need at least 3
-    blt $s3, 3, diag_tlbr_no_match
-
-    # Mark all matched cells
-    move $s4, $s0       # current_x = start_x
-    move $s5, $s1       # current_y = start_y
-    li $t0, 0           # offset = 0
-
-diag_tlbr_mark_loop:
-    bge $t0, $s3, diag_tlbr_no_match    # marked all?
-
-    move $a0, $s4       # x
-    move $a1, $s5       # y
-    jal mark_cell
-
-    addi $s4, $s4, 1    # current_x++
-    addi $s5, $s5, 1    # current_y++
-    addi $t0, $t0, 1    # offset++
-    j diag_tlbr_mark_loop
-
-diag_tlbr_no_match:
-    lw $s5, 24($sp)
-    lw $s4, 20($sp)
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 28
-    jr $ra
-
-
-####################################################################
-# Check and mark DIAGONAL matches (top-right to bottom-left)
-# Input: $a0 = x, $a1 = y, $a2 = target_color
-####################################################################
-check_diagonal_trbl_match:
-    addi $sp, $sp, -28
-    sw $ra, 0($sp)
-    sw $s0, 4($sp)      # start_x
-    sw $s1, 8($sp)      # start_y
-    sw $s2, 12($sp)     # target_color
-    sw $s3, 16($sp)     # match_count
-    sw $s4, 20($sp)     # current_x
-    sw $s5, 24($sp)     # current_y
-
-    move $s0, $a0       # start_x
-    move $s1, $a1       # start_y
-    move $s2, $a2       # target_color
-
-    # Check starting cell
-    move $a0, $s0
-    move $a1, $s1
-    move $a2, $s2
-    jal check_cell_matches
-    beq $v0, $zero, diag_trbl_no_match
-
-    # Count matches diagonally (down-left)
-    li $s3, 1           # count = 1
-    addi $s4, $s0, -1   # current_x = start_x - 1
-    addi $s5, $s1, 1    # current_y = start_y + 1
-
-diag_trbl_count_loop:
-    bltz $s4, diag_trbl_count_done      # reached left edge?
-    bge $s5, 12, diag_trbl_count_done   # reached bottom edge?
-
-    move $a0, $s4       # x = current_x
-    move $a1, $s5       # y = current_y
-    move $a2, $s2       # color
-    jal check_cell_matches
-    beq $v0, $zero, diag_trbl_count_done    # no match?
-
-    addi $s3, $s3, 1    # count++
-    addi $s4, $s4, -1   # current_x--
-    addi $s5, $s5, 1    # current_y++
-    j diag_trbl_count_loop
-
-diag_trbl_count_done:
-    # Need at least 3
-    blt $s3, 3, diag_trbl_no_match
-
-    # Mark all matched cells
-    move $s4, $s0       # current_x = start_x
-    move $s5, $s1       # current_y = start_y
-    li $t0, 0           # offset = 0
-
-diag_trbl_mark_loop:
-    bge $t0, $s3, diag_trbl_no_match    # marked all?
-
-    move $a0, $s4       # x
-    move $a1, $s5       # y
-    jal mark_cell
-
-    addi $s4, $s4, -1   # current_x--
-    addi $s5, $s5, 1    # current_y++
-    addi $t0, $t0, 1    # offset++
-    j diag_trbl_mark_loop
-
-diag_trbl_no_match:
-    lw $s5, 24($sp)
-    lw $s4, 20($sp)
-    lw $s3, 16($sp)
-    lw $s2, 12($sp)
-    lw $s1, 8($sp)
-    lw $s0, 4($sp)
-    lw $ra, 0($sp)
-    addi $sp, $sp, 28
-    jr $ra
-
-
-####################################################################
-# Scan all cells for matches of a specific color
-# Input: $s0 = target_color (caller-saved register)
-####################################################################
-scan_color_matches:
+scan_matches_by_color:
+# scan all the grid by color
+# input: $s0 = the color want to detect
     addi $sp, $sp, -20
     sw $ra, 0($sp)
-    sw $s0, 4($sp)      # target_color
-    sw $s1, 8($sp)      # y
-    sw $s2, 12($sp)     # x
-    sw $s3, 16($sp)     # temp
+    sw $s0, 4($sp)      # Save color
+    sw $s1, 8($sp)
+    sw $s2, 12($sp)
+    sw $s3, 16($sp)
 
-    li $s1, 0           # y = 0
+    li $s1, 0           # row = 0
 
-scan_row_loop:
-    bge $s1, 12, scan_done
+color_scan_row_loop:
+    bge $s1, 12, color_scan_done
 
-    li $s2, 0           # x = 0
+    li $s2, 0           # col = 0
 
-scan_col_loop:
-    bge $s2, 6, scan_next_row
+color_scan_col_loop:
+    bge $s2, 6, color_scan_next_row
 
-    # Check all 4 directions from this position
-    move $a0, $s2       # x
-    move $a1, $s1       # y
-    move $a2, $s0       # color
+    # Check all directions for matches
+    # check horizontal
+    add $a0, $s1, $zero     # row
+    add $a1, $s2, $zero     # col
+    add $a2, $s0, $zero     # color
+    jal check_and_mark_horizontal
 
-    jal check_horizontal_match
+    # check vertical
+    add $a0, $s1, $zero     # row
+    add $a1, $s2, $zero     # col
+    add $a2, $s0, $zero     # color
+    jal check_and_mark_vertical
 
-    move $a0, $s2       # x
-    move $a1, $s1       # y
-    move $a2, $s0       # color
-    jal check_vertical_match
+    # check diagonal form top left to bottom right
+    add $a0, $s1, $zero     # row
+    add $a1, $s2, $zero     # col
+    add $a2, $s0, $zero     # color
+    jal check_and_mark_diagonal_tlbr
 
-    move $a0, $s2       # x
-    move $a1, $s1       # y
-    move $a2, $s0       # color
-    jal check_diagonal_tlbr_match
+    # check diagonal from top right to bottom left
+    add $a0, $s1, $zero     # row
+    add $a1, $s2, $zero     # col
+    add $a2, $s0, $zero     # color
+    jal check_and_mark_diagonal_trbl
 
-    move $a0, $s2       # x
-    move $a1, $s1       # y
-    move $a2, $s0       # color
-    jal check_diagonal_trbl_match
+    addi $s2, $s2, 1        # col ++
+    j color_scan_col_loop
 
-    addi $s2, $s2, 1    # x++
-    j scan_col_loop
+color_scan_next_row:
+    addi $s1, $s1, 1        # row ++
+    j color_scan_row_loop
 
-scan_next_row:
-    addi $s1, $s1, 1    # y++
-    j scan_row_loop
 
-scan_done:
+color_scan_done:
     lw $s3, 16($sp)
     lw $s2, 12($sp)
     lw $s1, 8($sp)
     lw $s0, 4($sp)
     lw $ra, 0($sp)
     addi $sp, $sp, 20
+    jr $ra
+
+
+check_and_mark_horizontal:
+# given color, check match left to right and mark
+# input: $a0 = row, $a1 = col, $a2, = color
+# NEW: Use get_cell(x, y)
+    addi $sp, $sp, -20
+    sw $ra, 0($sp)
+    sw $s0, 4($sp)              # $s0 = y (row)
+    sw $s1, 8($sp)              # $s1 = start_x (col)
+    sw $s2, 12($sp)             # $s2 = color
+    sw $s3, 16($sp)             # $s3 = counter
+
+    # store $a to $s
+    add $s0, $a0, $zero         # y = row
+    add $s1, $a1, $zero         # x = col
+    add $s2, $a2, $zero         # color
+
+    # check if the start grid has same color - get_cell(x, y)
+    add $a0, $s1, $zero         # a0 = x (col)
+    add $a1, $s0, $zero         # a1 = y (row)
+    jal get_cell
+    bne $v0, $s2, h_no_match
+
+    # then prepare counting
+    li $s3, 1           # including start point itself
+    li $t0, 1           # initialize offset by one(the next point)
+
+h_count_loop:
+    # counting start
+    add $t1, $s1, $t0               # next_x = start_x + offset
+    bge $t1, 6, h_count_done        # make sure stay in the game
+    # get the next color - get_cell(x, y)
+    add $a0, $t1, $zero             # a0 = next_x
+    add $a1, $s0, $zero             # a1 = y (row)
+    jal get_cell
+    # check the color is same
+    bne $v0, $s2, h_count_done      # not same, stop counting
+    addi $s3, $s3, 1                # same, counter +1
+    addi $t0, $t0, 1                # offset +1
+    j h_count_loop
+
+h_count_done:
+    # check at counter >= 3
+    li $t0, 3
+    blt $s3, $t0, h_no_match        # no match, quit
+    # otherwise, start to mark in match_buffer
+    li $t0, 0                       # initial offset in match_buffer(the start point)
+
+h_mark_loop:
+    bge $t0, $s3, h_no_match        # finish marking
+
+    add $t1, $s1, $t0               # mark_x = start_x + offset
+    add $a0, $s0, $zero             # a0 = y (row)
+    add $a1, $t1, $zero             # a1 = x (mark_x)
+    jal mark_position_for_deletion
+
+    addi $t0, $t0, 1
+    j h_mark_loop
+
+h_no_match:
+    lw $s3, 16($sp)
+    lw $s2, 12($sp)
+    lw $s1, 8($sp)
+    lw $s0, 4($sp)
+    lw $ra, 0($sp)
+    addi $sp, $sp, 20
+    jr $ra
+
+
+check_and_mark_vertical:
+# Check for vertical match starting at (x, y)
+# NEW CONVENTION: Input: $a0 = start_y, $a1 = start_x, $a2 = target_color
+    addi $sp, $sp, -24
+    sw $ra, 0($sp)
+    sw $s0, 4($sp)      # x
+    sw $s1, 8($sp)      # y
+    sw $s2, 12($sp)     # target_color
+    sw $s3, 16($sp)     # match_count
+    sw $s4, 20($sp)     # temp
+
+    # Save parameters (OLD INTERFACE: y, x, color)
+    move $s1, $a0       # start_y
+    move $s0, $a1       # start_x
+    move $s2, $a2       # target_color
+
+    # Check if starting cell matches
+    move $a0, $s0       # x
+    move $a1, $s1       # y
+    jal get_cell
+    bne $v0, $s2, v_no_match_new
+
+    # Count consecutive matches downward
+    li $s3, 1           # count = 1 (including starting cell)
+    li $s4, 1           # offset = 1
+
+v_count_loop_new:
+    add $t0, $s1, $s4   # next_y = start_y + offset
+    bge $t0, 12, v_count_done_new   # if next_y >= 12, done
+
+    # Check cell at (x, next_y)
+    move $a0, $s0       # x
+    move $a1, $t0       # y
+    jal get_cell
+
+    bne $v0, $s2, v_count_done_new  # different color, done
+    addi $s3, $s3, 1    # count++
+    addi $s4, $s4, 1    # offset++
+    j v_count_loop_new
+
+v_count_done_new:
+    # Need at least 3 for a match
+    blt $s3, 3, v_no_match_new
+
+    # Mark all matched cells
+    li $s4, 0           # offset = 0
+v_mark_loop_new:
+    bge $s4, $s3, v_no_match_new    # marked all
+
+    add $t0, $s1, $s4   # mark_y = start_y + offset
+    move $a0, $t0       # y (OLD INTERFACE)
+    move $a1, $s0       # x (OLD INTERFACE)
+    jal mark_position_for_deletion
+
+    addi $s4, $s4, 1
+    j v_mark_loop_new
+
+v_no_match_new:
+    lw $s4, 20($sp)
+    lw $s3, 16($sp)
+    lw $s2, 12($sp)
+    lw $s1, 8($sp)
+    lw $s0, 4($sp)
+    lw $ra, 0($sp)
+    addi $sp, $sp, 24
+    jr $ra
+
+
+check_and_mark_diagonal_tlbr:
+# given color, check match top left to bottom right and mark
+# input: $a0 = row, $a1 = col, $a2, = color
+# NEW: Use get_cell(x, y)
+    addi $sp, $sp, -20
+    sw $ra, 0($sp)
+    sw $s0, 4($sp)              # $s0 = start_y (row)
+    sw $s1, 8($sp)              # $s1 = start_x (col)
+    sw $s2, 12($sp)             # $s2 = color
+    sw $s3, 16($sp)             # $s3 = counter
+
+    # store $a to $s
+    add $s0, $a0, $zero         # y = row
+    add $s1, $a1, $zero         # x = col
+    add $s2, $a2, $zero         # color
+
+    # check if the start grid has same color - get_cell(x, y)
+    add $a0, $s1, $zero         # a0 = x
+    add $a1, $s0, $zero         # a1 = y
+    jal get_cell
+    bne $v0, $s2, d_tlbr_no_match
+
+    # then prepare counting
+    li $s3, 1           # including start point itself
+    li $t0, 1           # initialize offset by one(the next point)
+
+d_tlbr_count_loop:
+    # calculating and check the next in the game
+    add $t1, $s0, $t0                       # next_y = start_y + offset
+    bge $t1, 12, d_tlbr_count_done          # check in boundary
+
+    add $t2, $s1, $t0                       # next_x = start_x + offset
+    bge $t2, 6, d_tlbr_count_done           # check in boundary
+
+    # get the next color - get_cell(x, y)
+    add $a0, $t2, $zero         # a0 = next_x
+    add $a1, $t1, $zero         # a1 = next_y
+    jal get_cell
+
+    bne $v0, $s2, d_tlbr_count_done         # color not match, quit
+    addi $s3, $s3, 1                        # otherwise, counter++
+    addi $t0, $t0, 1                        # offset++
+    j d_tlbr_count_loop
+
+d_tlbr_count_done:
+    li $t0, 3
+    blt $s3, $t0, d_tlbr_no_match
+
+    li $t0, 0
+d_tlbr_mark_loop:
+    bge $t0, $s3, d_tlbr_no_match
+
+    add $t1, $s0, $t0           # mark_y = start_y + offset
+    add $t2, $s1, $t0           # mark_x = start_x + offset
+    add $a0, $t1, $zero         # a0 = y
+    add $a1, $t2, $zero         # a1 = x
+    jal mark_position_for_deletion
+
+    addi $t0, $t0, 1
+    j d_tlbr_mark_loop
+
+d_tlbr_no_match:
+    lw $s3, 16($sp)
+    lw $s2, 12($sp)
+    lw $s1, 8($sp)
+    lw $s0, 4($sp)
+    lw $ra, 0($sp)
+    addi $sp, $sp, 20
+    jr $ra
+
+
+check_and_mark_diagonal_trbl:
+# given color, check match top right to bottom left and mark
+# input: $a0 = row, $a1 = col, $a2, = color
+# NEW: Use get_cell(x, y)
+    addi $sp, $sp, -20
+    sw $ra, 0($sp)
+    sw $s0, 4($sp)              # $s0 = start_y (row)
+    sw $s1, 8($sp)              # $s1 = start_x (col)
+    sw $s2, 12($sp)             # $s2 = color
+    sw $s3, 16($sp)             # $s3 = counter
+
+    # store $a to $s
+    add $s0, $a0, $zero         # y = row
+    add $s1, $a1, $zero         # x = col
+    add $s2, $a2, $zero         # color
+
+    # check if the start grid has same color - get_cell(x, y)
+    add $a0, $s1, $zero         # a0 = x
+    add $a1, $s0, $zero         # a1 = y
+    jal get_cell
+    bne $v0, $s2, d_trbl_no_match
+
+    # then prepare counting
+    li $s3, 1           # including start point itself
+    li $t0, 1           # initialize offset by one(the next point)
+
+d_trbl_count_loop:
+    add $t1, $s0, $t0           # next_y = start_y + offset
+    bge $t1, 12, d_trbl_count_done
+
+    sub $t2, $s1, $t0           # next_x = start_x - offset
+    blt $t2, $zero, d_trbl_count_done
+
+    # get the next color - get_cell(x, y)
+    add $a0, $t2, $zero         # a0 = next_x
+    add $a1, $t1, $zero         # a1 = next_y
+    jal get_cell
+
+    bne $v0, $s2, d_trbl_count_done
+    addi $s3, $s3, 1
+    addi $t0, $t0, 1
+    j d_trbl_count_loop
+
+d_trbl_count_done:
+    li $t0, 3
+    blt $s3, $t0, d_trbl_no_match
+
+    li $t0, 0
+d_trbl_mark_loop:
+    bge $t0, $s3, d_trbl_no_match
+
+    add $t1, $s0, $t0           # mark_y = start_y + offset
+    addi $t2, $s1, 0            # mark_x = start_x - offset
+    sub $t2, $t2, $t0
+    add $a0, $t1, $zero         # a0 = y
+    add $a1, $t2, $zero         # a1 = x
+    jal mark_position_for_deletion
+
+    addi $t0, $t0, 1
+    j d_trbl_mark_loop
+d_trbl_no_match:
+    lw $s3, 16($sp)
+    lw $s2, 12($sp)
+    lw $s1, 8($sp)
+    lw $s0, 4($sp)
+    lw $ra, 0($sp)
+    addi $sp, $sp, 20
+    jr $ra
+
+
+mark_position_for_deletion:
+# mark a spot in match_buffer(set as 1)
+# input: $a0 = row, $a1 = col
+    # calculate offset = (row * 6 + col) * 4
+    li $t0, 6
+    mul $t1, $a0, $t0
+    add $t1, $t1, $a1
+    sll $t1, $t1, 2
+
+    # mark this in match_buffer
+    la $t0, match_buffer
+    add $t0, $t0, $t1
+    li $t2, 1
+    sw $t2, 0($t0)
+
     jr $ra
 
 
