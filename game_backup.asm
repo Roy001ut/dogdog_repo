@@ -625,96 +625,49 @@ h_collision_detected:
     jr $ra
 
 
-####################################################################
-# GAME FIELD CORE FUNCTIONS
-# Convention: ALL functions use (x, y) where:
-#   x = column (0-5, left to right)
-#   y = row (0-11, top to bottom)
-# Storage: game_field[y][x] at offset (y * 6 + x) * 4
-####################################################################
-
-get_cell:
-# Get color at position (x, y)
-# Input: $a0 = x (column 0-5), $a1 = y (row 0-11)
-# Output: $v0 = color (0 if out of bounds or empty)
-    # Bounds check
-    bltz $a0, cell_out_of_bounds    # x < 0
-    bgt $a0, 5, cell_out_of_bounds   # x > 5
-    bltz $a1, cell_out_of_bounds    # y < 0
-    bgt $a1, 11, cell_out_of_bounds  # y > 11
-
-    # Calculate offset: (y * 6 + x) * 4
+get_field_color:
+# get the color of field at that location
+# $a0 = y, $a1 = x
+# return $v0 = color
+    # check it's inside
+    bltz $a0, out_of_bounds
+    bgt $a0, 11, out_of_bounds
+    bltz $a1, out_of_bounds
+    bgt $a1, 5, out_of_bounds
+    # load the real index
     li $t0, 6
-    mul $t1, $a1, $t0      # t1 = y * 6
-    add $t1, $t1, $a0      # t1 = y * 6 + x
-    sll $t1, $t1, 2        # t1 = (y * 6 + x) * 4
-
-    # Load from game_field
+    mul $t1, $t0, $a0
+    add $t1, $t1, $a1
+    sll $t1, $t1, 2
+    # get the real address and its color
     la $t0, game_field
     add $t0, $t0, $t1
     lw $v0, 0($t0)
     jr $ra
 
-cell_out_of_bounds:
+out_of_bounds:
     li $v0, 0
     jr $ra
 
 
-set_cell:
-# Set color at position (x, y)
-# Input: $a0 = x (column 0-5), $a1 = y (row 0-11), $a2 = color
-    # Bounds check
-    bltz $a0, set_cell_done
-    bgt $a0, 5, set_cell_done
-    bltz $a1, set_cell_done
-    bgt $a1, 11, set_cell_done
-
-    # Calculate offset: (y * 6 + x) * 4
+set_field_color:
+# set color to a location
+# $a0 = y, $a1 = x, $a2 = color
+    addi $sp, $sp, -4
+    sw $s0, 0($sp)
+    # load the real index
     li $t0, 6
-    mul $t1, $a1, $t0      # t1 = y * 6
-    add $t1, $t1, $a0      # t1 = y * 6 + x
-    sll $t1, $t1, 2        # t1 = (y * 6 + x) * 4
-
-    # Store to game_field
+    mul $t1, $t0, $a0
+    add $t1, $t1, $a1
+    sll $t1, $t1, 2
+    # get the real address and write color into it
     la $t0, game_field
     add $t0, $t0, $t1
-    sw $a2, 0($t0)
+    sw $a2, 0($t0)   # write color
 
-set_cell_done:
+    lw $s0, 0($sp)
+    addi $sp, $sp, 4
     jr $ra
-
-
-# Legacy wrapper functions for compatibility
-get_field_color:
-# OLD INTERFACE: $a0 = y, $a1 = x -> $v0 = color
-# Wrapper that converts to new convention
-    addi $sp, $sp, -8
-    sw $a0, 0($sp)
-    sw $a1, 4($sp)
-
-    # Swap arguments: old (y,x) -> new (x,y)
-    lw $a0, 4($sp)      # a0 = old x
-    lw $a1, 0($sp)      # a1 = old y
-
-    addi $sp, $sp, 8
-    j get_cell
-
-
-set_field_color:
-# OLD INTERFACE: $a0 = y, $a1 = x, $a2 = color
-# Wrapper that converts to new convention
-    addi $sp, $sp, -8
-    sw $a0, 0($sp)
-    sw $a1, 4($sp)
-
-    # Swap arguments: old (y,x) -> new (x,y)
-    move $t0, $a2       # save color
-    lw $a0, 4($sp)      # a0 = old x
-    lw $a1, 0($sp)      # a1 = old y
-    move $a2, $t0       # restore color
-
-    addi $sp, $sp, 8
-    j set_cell
 
 
 lock_column_to_field:
@@ -1024,70 +977,68 @@ h_no_match:
 
 
 check_and_mark_vertical:
-# Check for vertical match starting at (x, y)
-# NEW CONVENTION: Input: $a0 = start_y, $a1 = start_x, $a2 = target_color
-    addi $sp, $sp, -24
+# given color, check match top to bottom and mark
+# input: $a0 = row, $a1 = col, $a2, = color
+    addi $sp, $sp, -20
     sw $ra, 0($sp)
-    sw $s0, 4($sp)      # x
-    sw $s1, 8($sp)      # y
-    sw $s2, 12($sp)     # target_color
-    sw $s3, 16($sp)     # match_count
-    sw $s4, 20($sp)     # temp
+    sw $s0, 4($sp)              # $s0 = initial row
+    sw $s1, 8($sp)              # $s1 =  col
+    sw $s2, 12($sp)             # $s2 = color
+    sw $s3, 16($sp)             # $s3 = counter
 
-    # Save parameters (OLD INTERFACE: y, x, color)
-    move $s1, $a0       # start_y
-    move $s0, $a1       # start_x
-    move $s2, $a2       # target_color
+    # store $a to $s
+    add $s0, $a0, $zero
+    add $s1, $a1, $zero
+    add $s2, $a2, $zero
 
-    # Check if starting cell matches
-    move $a0, $s0       # x
-    move $a1, $s1       # y
-    jal get_cell
-    bne $v0, $s2, v_no_match_new
+    # check if the start grid has same color,
+    # otherwise, quit
+    add $a0, $s0, $zero
+    add $a1, $s1, $zero
+    jal get_field_color
+    bne $v0, $s2, v_no_match
 
-    # Count consecutive matches downward
-    li $s3, 1           # count = 1 (including starting cell)
-    li $s4, 1           # offset = 1
+    # then prepare counting
+    li $s3, 1           # including start point itself
+    li $t0, 1           # initialize offset by one(the next point)
 
-v_count_loop_new:
-    add $t0, $s1, $s4   # next_y = start_y + offset
-    bge $t0, 12, v_count_done_new   # if next_y >= 12, done
+v_count_loop:
 
-    # Check cell at (x, next_y)
-    move $a0, $s0       # x
-    move $a1, $t0       # y
-    jal get_cell
+    add $t1, $s0, $t0
+    bge $t1, 12, v_count_done
 
-    bne $v0, $s2, v_count_done_new  # different color, done
-    addi $s3, $s3, 1    # count++
-    addi $s4, $s4, 1    # offset++
-    j v_count_loop_new
+    add $a0, $t1, $zero
+    add $a1, $s1, $zero
+    jal get_field_color
 
-v_count_done_new:
-    # Need at least 3 for a match
-    blt $s3, 3, v_no_match_new
+    bne $v0, $s2, v_count_done
+    addi $s3, $s3, 1
+    addi $t0, $t0, 1
+    j v_count_loop
 
-    # Mark all matched cells
-    li $s4, 0           # offset = 0
-v_mark_loop_new:
-    bge $s4, $s3, v_no_match_new    # marked all
+v_count_done:
+    li $t0, 3
+    blt $s3, $t0, v_no_match
 
-    add $t0, $s1, $s4   # mark_y = start_y + offset
-    move $a0, $t0       # y (OLD INTERFACE)
-    move $a1, $s0       # x (OLD INTERFACE)
+    li $t0, 0
+v_mark_loop:
+    bge $t0, $s3, v_no_match
+
+    add $t1, $s0, $t0
+    add $a0, $t1, $zero
+    add $a1, $s1, $zero
     jal mark_position_for_deletion
 
-    addi $s4, $s4, 1
-    j v_mark_loop_new
+    addi $t0, $t0, 1
+    j v_mark_loop
 
-v_no_match_new:
-    lw $s4, 20($sp)
+v_no_match:
     lw $s3, 16($sp)
     lw $s2, 12($sp)
     lw $s1, 8($sp)
     lw $s0, 4($sp)
     lw $ra, 0($sp)
-    addi $sp, $sp, 24
+    addi $sp, $sp, 20
     jr $ra
 
 
