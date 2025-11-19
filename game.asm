@@ -57,57 +57,6 @@ match_buffer:   .space 288
 main:
     # Initialize the game
     jal init_game_field
-
-    # DEBUG TEST: Use NEW set_cell function directly (bypass wrapper)
-    la $t0, COLOR_RED
-    lw $t9, 0($t0)
-
-    # Test 1: Set position (x=2, y=9) to RED using NEW function
-    li $a0, 2       # x = 2
-    li $a1, 9       # y = 9
-    move $a2, $t9   # red
-    jal set_cell
-
-    # Test 2: Set position (x=2, y=10) to RED using NEW function
-    li $a0, 2       # x = 2
-    li $a1, 10      # y = 10
-    move $a2, $t9   # red
-    jal set_cell
-
-    # Test 3: Set position (x=2, y=11) to RED using NEW function
-    li $a0, 2       # x = 2
-    li $a1, 11      # y = 11
-    move $a2, $t9   # red
-    jal set_cell
-
-    # Draw the field to see the gems
-    jal clear_screen
-    jal draw_border
-    jal draw_game_field
-
-    # Wait so we can see them
-    li $v0, 32
-    li $a0, 2000    # 2 seconds
-    syscall
-
-    # Now try to detect and clear matches
-    jal check_and_clear_matches
-
-    # Draw again to see if they were cleared
-    jal clear_screen
-    jal draw_border
-    jal draw_game_field
-
-    # Wait so we can see the result
-    li $v0, 32
-    li $a0, 3000    # 3 seconds
-    syscall
-
-    # Exit after debug test
-    li $v0, 10
-    syscall
-
-    # ORIGINAL CODE (commented out for debug):
     jal generate_new_column
 
     # Check if initial spawn is blocked (should not happen on empty field)
@@ -587,25 +536,25 @@ init_done:
 check_bottom_collision:
 # check whether the column hit,
 # return $v0 = 1/0
-
+# NEW: Use get_cell(x, y)
     addi $sp, $sp, -16
     sw $ra, 0($sp)
     sw $s0, 4($sp)
     sw $s1, 8($sp)
     sw $s2, 12($sp)
     # get the location
-    lw $s0, column_x
-    lw $s1, column_y
+    lw $s0, column_x        # $s0 = x
+    lw $s1, column_y        # $s1 = y
 
-    addi $s2, $s1, 2
+    addi $s2, $s1, 2        # $s2 = y + 2 (bottom gem position)
     # 1. check if it hit the bottom
     li $t0, 11
     beq $s2, $t0, collision_detected
 
-    # 2. check if it hit other column
-    addi $a0, $s2, 1
-    add $a1, $s0, $zero
-    jal get_field_color
+    # 2. check if it hit other column - get_cell(x, y)
+    add $a0, $s0, $zero     # a0 = x
+    addi $a1, $s2, 1        # a1 = y + 3 (one below bottom gem)
+    jal get_cell
     # recieve $v0 represent the T/F
     bne $v0, $zero, collision_detected # $v0 is True
 
@@ -632,6 +581,7 @@ check_horizontal_collision:
 # Check if moving the current column to new_x would cause collision
 # $a0 = new_x position to check
 # return $v0 = 1 if collision, 0 if OK
+# NEW: Use get_cell(x, y)
     addi $sp, $sp, -12
     sw $ra, 0($sp)
     sw $s0, 4($sp)     # new_x
@@ -641,22 +591,22 @@ check_horizontal_collision:
     lw $s1, column_y        # current_y
 
     # Check all three gem positions
-    # Check top gem
-    add $a0, $s1, $zero
-    add $a1, $s0, $zero
-    jal get_field_color
+    # Check top gem - get_cell(x, y)
+    add $a0, $s0, $zero     # a0 = new_x
+    add $a1, $s1, $zero     # a1 = y
+    jal get_cell
     bne $v0, $zero, h_collision_detected
 
     # Check middle gem
-    addi $a0, $s1, 1
-    add $a1, $s0, $zero
-    jal get_field_color
+    add $a0, $s0, $zero     # a0 = new_x
+    addi $a1, $s1, 1        # a1 = y + 1
+    jal get_cell
     bne $v0, $zero, h_collision_detected
 
     # Check bottom gem
-    addi $a0, $s1, 2
-    add $a1, $s0, $zero
-    jal get_field_color
+    add $a0, $s0, $zero     # a0 = new_x
+    addi $a1, $s1, 2        # a1 = y + 2
+    jal get_cell
     bne $v0, $zero, h_collision_detected
 
     # No collision
@@ -770,30 +720,31 @@ set_field_color:
 
 lock_column_to_field:
 # lock the current column to the field
+# NEW: Use set_cell(x, y, color) directly
     addi $sp, $sp, -16
     sw $ra, 0($sp)
     sw $s0, 4($sp)
     sw $s1, 8($sp)
     sw $s2, 12($sp)
     # get column location
-    lw $s0, column_x
-    lw $s1, column_y
+    lw $s0, column_x        # $s0 = x
+    lw $s1, column_y        # $s1 = y
     la $s2, current_column
-    # lock the top
-    add $a0, $s1, $zero
-    add $a1, $s0, $zero
-    lw $a2, 0($s2)
-    jal set_field_color
-    # lock the middle
-    addi $a0, $s1, 1
-    add $a1, $s0, $zero
-    lw $a2, 4($s2)
-    jal set_field_color
-    # lock the bottom
-    addi $a0, $s1, 2
-    add $a1, $s0, $zero
-    lw $a2, 8($s2)
-    jal set_field_color
+    # lock the top gem
+    add $a0, $s0, $zero     # a0 = x
+    add $a1, $s1, $zero     # a1 = y
+    lw $a2, 0($s2)          # a2 = color
+    jal set_cell
+    # lock the middle gem
+    add $a0, $s0, $zero     # a0 = x
+    addi $a1, $s1, 1        # a1 = y + 1
+    lw $a2, 4($s2)          # a2 = color
+    jal set_cell
+    # lock the bottom gem
+    add $a0, $s0, $zero     # a0 = x
+    addi $a1, $s1, 2        # a1 = y + 2
+    lw $a2, 8($s2)          # a2 = color
+    jal set_cell
 
     lw $s2, 12($sp)
     lw $s1, 8($sp)
@@ -804,7 +755,8 @@ lock_column_to_field:
 
 
 draw_game_field:
-# Draw all column in the field.
+# Draw all gems in the field.
+# NEW: Use get_cell(x, y)
     addi $sp, $sp, -16
     sw $ra, 0($sp)
     sw $s0, 4($sp)
@@ -822,16 +774,16 @@ draw_field_row_loop:
 draw_field_col_loop:
     li $t0, 6       # set max x
     bge $s1, $t0, draw_field_next_row        # check if hit
-    # first, get the color at the location
-    add $a0, $s0, $zero
-    add $a1, $s1, $zero
-    jal get_field_color
+    # first, get the color at the location - get_cell(x, y)
+    add $a0, $s1, $zero     # a0 = x
+    add $a1, $s0, $zero     # a1 = y
+    jal get_cell
 
     beq $v0, $zero, draw_field_skip     # if $v0 is 0, it's empty
-    # then draw the grid
-    add $a0, $s0, $zero
-    add $a1, $s1, $zero
-    add $a2, $v0, $zero
+    # then draw the grid - draw_game_pixel(y, x, color)
+    add $a0, $s0, $zero     # a0 = y (for drawing)
+    add $a1, $s1, $zero     # a1 = x (for drawing)
+    add $a2, $v0, $zero     # a2 = color
     jal draw_game_pixel
 
 draw_field_skip:
@@ -1331,7 +1283,7 @@ marked_found:
 
 flash_marked_gems:
 # Flash marked gems in white to show what will be cleared
-# no input
+# NEW: Use set_cell(x, y, color) directly
     addi $sp, $sp, -16
     sw $ra, 0($sp)
     sw $s0, 4($sp)
@@ -1340,20 +1292,20 @@ flash_marked_gems:
 
     la $t0, COLOR_WHITE
     lw $s2, 0($t0)          # $s2 = white color
-    li $s0, 0               # $s0 = row
+    li $s0, 0               # $s0 = y (row)
 
 flash_row_loop:
     bge $s0, 12, flash_done
-    li $s1, 0               # $s1 = col
+    li $s1, 0               # $s1 = x (col)
 
 flash_col_loop:
     bge $s1, 6, flash_next_row
 
-    # Calculate offset in match_buffer
+    # Calculate offset in match_buffer: (y * 6 + x) * 4
     li $t0, 6
-    mul $t1, $s0, $t0
-    add $t1, $t1, $s1
-    sll $t1, $t1, 2
+    mul $t1, $s0, $t0       # y * 6
+    add $t1, $t1, $s1       # y * 6 + x
+    sll $t1, $t1, 2         # (y * 6 + x) * 4
 
     # Check if this position is marked
     la $t0, match_buffer
@@ -1362,18 +1314,18 @@ flash_col_loop:
 
     beq $t2, $zero, flash_col_next
 
-    # Flash this gem to white
-    add $a0, $s0, $zero
-    add $a1, $s1, $zero
-    add $a2, $s2, $zero
-    jal set_field_color
+    # Flash this gem to white - set_cell(x, y, color)
+    add $a0, $s1, $zero     # a0 = x
+    add $a1, $s0, $zero     # a1 = y
+    add $a2, $s2, $zero     # a2 = white
+    jal set_cell
 
 flash_col_next:
-    addi $s1, $s1, 1
+    addi $s1, $s1, 1        # x++
     j flash_col_loop
 
 flash_next_row:
-    addi $s0, $s0, 1
+    addi $s0, $s0, 1        # y++
     j flash_row_loop
 
 flash_done:
@@ -1387,28 +1339,28 @@ flash_done:
 
 clear_marked_gems:
 # clear all marked gems, and set them to be 0
-# no input
+# NEW: Use set_cell(x, y, color) directly
     addi $sp, $sp, -16
     sw $ra, 0($sp)
-    sw $s0, 4($sp)          # Use $s0 for row
-    sw $s1, 8($sp)          # Use $s1 for col
+    sw $s0, 4($sp)          # Use $s0 for y (row)
+    sw $s1, 8($sp)          # Use $s1 for x (col)
     sw $s2, 12($sp)         # Use $s2 for marked flag
 
-    li $s0, 0               # $s0 = row
+    li $s0, 0               # $s0 = y (row)
 
 clear_marked_row_loop:
     bge $s0, 12, clear_marked_done
 
-    li $s1, 0               # $s1 = col
+    li $s1, 0               # $s1 = x (col)
 
 clear_marked_col_loop:
-    bge $s1, 6, clear_marked_next_row   # if col >= 6, enter the next row
+    bge $s1, 6, clear_marked_next_row
 
-    # Calculate offset in match_buffer
+    # Calculate offset in match_buffer: (y * 6 + x) * 4
     li $t0, 6
-    mul $t1, $s0, $t0
-    add $t1, $t1, $s1
-    sll $t1, $t1, 2
+    mul $t1, $s0, $t0       # y * 6
+    add $t1, $t1, $s1       # y * 6 + x
+    sll $t1, $t1, 2         # (y * 6 + x) * 4
 
     # Check if this position is marked
     la $t0, match_buffer
@@ -1417,18 +1369,18 @@ clear_marked_col_loop:
 
     beq $s2, $zero, clear_marked_col_next
 
-    # Clear the gem at this position
-    add $a0, $s0, $zero
-    add $a1, $s1, $zero
-    li $a2, 0
-    jal set_field_color
+    # Clear the gem at this position - set_cell(x, y, 0)
+    add $a0, $s1, $zero     # a0 = x
+    add $a1, $s0, $zero     # a1 = y
+    li $a2, 0               # a2 = 0 (empty)
+    jal set_cell
 
 clear_marked_col_next:
-    addi $s1, $s1, 1
+    addi $s1, $s1, 1        # x++
     j clear_marked_col_loop
 
 clear_marked_next_row:
-    addi $s0, $s0, 1
+    addi $s0, $s0, 1        # y++
     j clear_marked_row_loop
 
 clear_marked_done:
@@ -1441,63 +1393,64 @@ clear_marked_done:
 
 
 apply_gravity:
+# NEW: Use get_cell(x, y) and set_cell(x, y, color) directly
     addi $sp, $sp, -20
     sw $ra, 0($sp)
-    sw $s0, 4($sp)              # $s0 = current col
-    sw $s1, 8($sp)              # $s1 = write_row (where to place next gem)
-    sw $s2, 12($sp)             # $s2 = read_row (scanning for gems)
+    sw $s0, 4($sp)              # $s0 = x (current column)
+    sw $s1, 8($sp)              # $s1 = write_y (where to place next gem)
+    sw $s2, 12($sp)             # $s2 = read_y (scanning for gems)
     sw $s3, 16($sp)             # $s3 = color
 
-    li $s0, 0                   # start with column 0
+    li $s0, 0                   # start with column 0 (x=0)
 
 gravity_column_loop:
     bge $s0, 6, gravity_complete    # processed all 6 columns?
 
     # For this column, compact all gems downward
-    li $s1, 11                  # write_row starts at bottom (row 11)
-    li $s2, 11                  # read_row starts at bottom too
+    li $s1, 11                  # write_y starts at bottom (row 11)
+    li $s2, 11                  # read_y starts at bottom too
 
 gravity_scan_loop:
     bltz $s2, gravity_next_column   # scanned all rows in this column?
 
-    # Get color at current read position
-    add $a0, $s2, $zero         # y = read_row
-    add $a1, $s0, $zero         # x = current column
-    jal get_field_color
+    # Get color at current read position - get_cell(x, y)
+    add $a0, $s0, $zero         # a0 = x (current column)
+    add $a1, $s2, $zero         # a1 = y (read_y)
+    jal get_cell
     add $s3, $v0, $zero         # save color
 
     beq $s3, $zero, gravity_scan_next   # empty? skip
 
-    # Found a gem at read_row, need to move it to write_row
+    # Found a gem at read_y, need to move it to write_y
     bne $s1, $s2, gravity_move_gem      # same position? no need to move
 
-    # Same position, just decrement write_row
+    # Same position, just decrement write_y
     addi $s1, $s1, -1
     j gravity_scan_next
 
 gravity_move_gem:
-    # Move gem from read_row to write_row
-    # Set gem at write_row
-    add $a0, $s1, $zero         # y = write_row
-    add $a1, $s0, $zero         # x = current column
-    add $a2, $s3, $zero         # color
-    jal set_field_color
+    # Move gem from read_y to write_y
+    # Set gem at write_y - set_cell(x, y, color)
+    add $a0, $s0, $zero         # a0 = x (current column)
+    add $a1, $s1, $zero         # a1 = y (write_y)
+    add $a2, $s3, $zero         # a2 = color
+    jal set_cell
 
-    # Clear gem at read_row
-    add $a0, $s2, $zero         # y = read_row
-    add $a1, $s0, $zero         # x = current column
-    li $a2, 0                   # color = 0 (empty)
-    jal set_field_color
+    # Clear gem at read_y - set_cell(x, y, 0)
+    add $a0, $s0, $zero         # a0 = x (current column)
+    add $a1, $s2, $zero         # a1 = y (read_y)
+    li $a2, 0                   # a2 = 0 (empty)
+    jal set_cell
 
-    # Move write_row up
+    # Move write_y up
     addi $s1, $s1, -1
 
 gravity_scan_next:
-    addi $s2, $s2, -1           # move read_row up
+    addi $s2, $s2, -1           # move read_y up
     j gravity_scan_loop
 
 gravity_next_column:
-    addi $s0, $s0, 1            # next column
+    addi $s0, $s0, 1            # next column (x++)
     j gravity_column_loop
 
 gravity_complete:
@@ -1697,32 +1650,33 @@ gv_blue:
 check_initial_collision:
 # Check if the newly generated column at starting position collides
 # return $v0 = 1 if collision (game over), 0 if OK
+# NEW: Use get_cell(x, y)
     addi $sp, $sp, -12
     sw $ra, 0($sp)
     sw $s0, 4($sp)
     sw $s1, 8($sp)
 
     # Get the starting position (should be x=2, y=0)
-    lw $s0, column_x    # Should be 2
-    lw $s1, column_y    # Should be 0
+    lw $s0, column_x    # $s0 = x (should be 2)
+    lw $s1, column_y    # $s1 = y (should be 0)
 
     # Check if any of the three positions of the new column are occupied
-    # Check top gem position (row 0)
-    add $a0, $s1, $zero
-    add $a1, $s0, $zero
-    jal get_field_color
+    # Check top gem position - get_cell(x, y)
+    add $a0, $s0, $zero     # a0 = x
+    add $a1, $s1, $zero     # a1 = y
+    jal get_cell
     bne $v0, $zero, initial_collision_detected
 
-    # Check middle gem position (row 1)
-    addi $a0, $s1, 1
-    add $a1, $s0, $zero
-    jal get_field_color
+    # Check middle gem position (y + 1)
+    add $a0, $s0, $zero     # a0 = x
+    addi $a1, $s1, 1        # a1 = y + 1
+    jal get_cell
     bne $v0, $zero, initial_collision_detected
 
-    # Check bottom gem position (row 2)
-    addi $a0, $s1, 2
-    add $a1, $s0, $zero
-    jal get_field_color
+    # Check bottom gem position (y + 2)
+    add $a0, $s0, $zero     # a0 = x
+    addi $a1, $s1, 2        # a1 = y + 2
+    jal get_cell
     bne $v0, $zero, initial_collision_detected
 
     # No collision, game continues
