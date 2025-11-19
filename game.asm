@@ -8,10 +8,10 @@
 # creation, and will indicate otherwise when it is not.
 #
 ######################## Bitmap Display Configuration ########################
-# - Unit width in pixels:       TODO
-# - Unit height in pixels:      TODO
-# - Display width in pixels:    TODO
-# - Display height in pixels:   TODO
+# - Unit width in pixels:       8
+# - Unit height in pixels:      8
+# - Display width in pixels:    256 (32 units * 8 pixels)
+# - Display height in pixels:   256 (32 units * 8 pixels)
 # - Base Address for Display:   0x10008000 ($gp)
 ##############################################################################
 
@@ -54,36 +54,64 @@ match_buffer:   .space 288
 
     # Run the game.
 main:
+    # Initialize the game
     jal init_game_field
+    jal generate_new_column
 
-    # 用 $s0 保存红色
-    la   $t0, COLOR_RED
-    lw   $s0, 0($t0)
+    # Check if initial spawn is blocked (should not happen on empty field)
+    jal check_initial_collision
+    bne $v0, $zero, game_over
 
-    # (x=1, y=5) = red - vertical line test
-    li   $a0, 5      # y
-    li   $a1, 1      # x
-    move $a2, $s0
-    jal  set_field_color
+game_loop:
+    # Check keyboard input
+    jal check_keyboard
 
-    # (x=1, y=6) = red
-    li   $a0, 6      # y
-    li   $a1, 1      # x
-    move $a2, $s0
-    jal  set_field_color
+    # Apply automatic gravity (makes column fall slowly)
+    jal apply_auto_gravity
 
-    # (x=1, y=7) = red
-    li   $a0, 7      # y
-    li   $a1, 1      # x
-    move $a2, $s0
-    jal  set_field_color
-
-    jal  draw_border
-    jal  draw_game_field
-    jal check_and_clear_matches  # 调用你的匹配+消除逻辑
-
+    # Clear screen and redraw everything
+    jal clear_screen
     jal draw_border
-jal draw_game_field   # 再画一次，看是不是被清掉
+    jal draw_game_field
+    jal draw_current_column
+
+    # Add a small delay to make the game playable (not too fast)
+    li $v0, 32          # syscall: sleep
+    li $a0, 50          # sleep for 50 milliseconds
+    syscall
+
+    # Check if current column hit the bottom or another piece
+    jal check_bottom_collision
+    beq $v0, $zero, game_loop   # No collision, continue loop
+
+    # Collision detected - lock the column to the field
+    jal lock_column_to_field
+
+    # Check for matches and clear them (with cascading)
+    jal check_and_clear_matches
+
+    # Redraw after clearing
+    jal clear_screen
+    jal draw_border
+    jal draw_game_field
+
+    # Generate new column
+    jal generate_new_column
+
+    # Check if new column can spawn (game over check)
+    jal check_initial_collision
+    bne $v0, $zero, game_over
+
+    # Continue game loop
+    j game_loop
+
+game_over:
+    # Display game over (draw final state)
+    jal clear_screen
+    jal draw_border
+    jal draw_game_field
+
+    # Exit gracefully
     li $v0, 10
     syscall
 
@@ -155,12 +183,21 @@ respond_d_done:
 
 
 respond_s:
-    lw $t3, column_y                # get previous row
-    li $t4, 9                       # set the bottom num is 9 (12-3)
-    beq $t3, $t4, respond_s_done    # check if hit the bottom
-    addi $t3, $t3, 1                # otherwise, row + 1
-    sw $t3, column_y                # reload
+    addi $sp, $sp, -4
+    sw $ra, 0($sp)
+
+    # Check if can move down (use existing collision detection)
+    jal check_bottom_collision
+    bne $v0, $zero, respond_s_done  # collision detected, don't move
+
+    # No collision, move down
+    lw $t3, column_y
+    addi $t3, $t3, 1
+    sw $t3, column_y
+
 respond_s_done:
+    lw $ra, 0($sp)
+    addi $sp, $sp, 4
     jr $ra
 
 
@@ -292,6 +329,48 @@ draw_v_done:
     lw $s0, 4($sp)
     lw $ra, 0($sp)
     addi $sp, $sp, 20
+    jr $ra
+
+
+clear_screen:
+# Clear the entire screen to black
+    addi $sp, $sp, -16
+    sw $ra, 0($sp)
+    sw $s0, 4($sp)
+    sw $s1, 8($sp)
+    sw $s2, 12($sp)
+
+    la $t0, COLOR_BLACK
+    lw $s2, 0($t0)      # $s2 = black color
+
+    li $s0, 0           # row = 0
+
+clear_row_loop:
+    bge $s0, 14, clear_done     # 14 rows total (0-13)
+    li $s1, 0           # col = 0
+
+clear_col_loop:
+    bge $s1, 8, clear_next_row  # 8 cols total (0-7)
+
+    # Draw black pixel
+    add $a0, $s0, $zero
+    add $a1, $s1, $zero
+    add $a2, $s2, $zero
+    jal draw_pixel_at_screen
+
+    addi $s1, $s1, 1
+    j clear_col_loop
+
+clear_next_row:
+    addi $s0, $s0, 1
+    j clear_row_loop
+
+clear_done:
+    lw $s2, 12($sp)
+    lw $s1, 8($sp)
+    lw $s0, 4($sp)
+    lw $ra, 0($sp)
+    addi $sp, $sp, 16
     jr $ra
 
 
